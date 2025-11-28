@@ -1,0 +1,346 @@
+/**
+ * AI 改写对话框样式
+ * 
+ * 遵循 Liquid Glass 设计系统：
+ * - 浮层使用 overlay 材质参数
+ * - 动画时长 180-260ms
+ * - 对比度 >= 4.5:1
+ */
+
+/* 遮罩层 */
+.ai-rewrite-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 180ms ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 对话框主体 */
+.ai-rewrite-dialog {
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  max-height: calc(100vh - 80px);
+  background-color: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  border-radius: 16px;
+  box-shadow:
+    0 24px 80px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+  animation: slideUp 200ms ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 头部 */
+.ai-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.ai-dialog-icon {
+  font-size: 18px;
+}
+
+.ai-dialog-title {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #1d1d1f);
+}
+
+.ai-dialog-close {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--text-secondary, #6e6e73);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 180ms ease-out;
+}
+
+.ai-dialog-close:hover:not(:disabled) {
+  background-color: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary, #1d1d1f);
+}
+
+.ai-dialog-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 内容区 */
+.ai-dialog-content {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 选区预览 */
+.ai-selection-preview {
+  padding: 12px;
+  background-color: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-preview-label {
+  color: var(--text-secondary, #6e6e73);
+  margin-right: 4px;
+}
+
+.ai-preview-text {
+  color: var(--text-primary, #1d1d1f);
+  font-style: italic;
+}
+
+/* 预设按钮组 */
+.ai-preset-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-preset-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary, #1d1d1f);
+  background-color: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 180ms ease-out;
+}
+
+.ai-preset-btn:hover:not(:disabled) {
+  background-color: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+.ai-preset-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 输入组 */
+.ai-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-intent-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--text-primary, #1d1d1f);
+  background-color: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  outline: none;
+  transition: all 180ms ease-out;
+}
+
+.ai-intent-input::placeholder {
+  color: var(--text-secondary, #6e6e73);
+}
+
+.ai-intent-input:focus {
+  border-color: #007AFF;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+}
+
+.ai-intent-input:disabled {
+  background-color: rgba(0, 0, 0, 0.04);
+  cursor: not-allowed;
+}
+
+/* 错误信息 */
+.ai-error-message {
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #d73a49;
+  background-color: rgba(215, 58, 73, 0.08);
+  border-radius: 8px;
+}
+
+/* 底部 */
+.ai-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* 按钮 */
+.ai-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 180ms ease-out;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-btn-secondary {
+  color: var(--text-primary, #1d1d1f);
+  background-color: rgba(0, 0, 0, 0.06);
+}
+
+.ai-btn-secondary:hover:not(:disabled) {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+.ai-btn-primary {
+  color: #fff;
+  background-color: #007AFF;
+}
+
+.ai-btn-primary:hover:not(:disabled) {
+  background-color: #0066d6;
+}
+
+/* Loading 动画 */
+.ai-loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Reduced transparency fallback */
+@media (prefers-reduced-transparency: reduce) {
+  .ai-rewrite-dialog-overlay {
+    background-color: rgba(0, 0, 0, 0.5);
+  }
+
+  .ai-rewrite-dialog {
+    background-color: #fff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* ==========================================
+   深色模式适配
+   对话框保持浅色背景，确保文字清晰可读
+   ========================================== */
+@media (prefers-color-scheme: dark) {
+  .ai-rewrite-dialog {
+    /* 深色模式下使用更不透明的浅色背景 */
+    background-color: rgba(255, 255, 255, 0.98);
+    box-shadow:
+      0 24px 80px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.2);
+  }
+
+  /* 确保所有文字使用深色 */
+  .ai-dialog-title {
+    color: #1d1d1f;
+  }
+
+  .ai-dialog-close {
+    color: #6e6e73;
+  }
+
+  .ai-dialog-close:hover:not(:disabled) {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+  }
+
+  .ai-preview-label {
+    color: #6e6e73;
+  }
+
+  .ai-preview-text {
+    color: #1d1d1f;
+  }
+
+  .ai-preset-btn {
+    color: #1d1d1f;
+    background-color: rgba(0, 0, 0, 0.06);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .ai-preset-btn:hover:not(:disabled) {
+    background-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .ai-intent-input {
+    color: #1d1d1f;
+    background-color: rgba(255, 255, 255, 0.9);
+    border-color: rgba(0, 0, 0, 0.15);
+  }
+
+  .ai-intent-input::placeholder {
+    color: #8e8e93;
+  }
+
+  .ai-btn-secondary {
+    color: #1d1d1f;
+    background-color: rgba(0, 0, 0, 0.08);
+  }
+
+  .ai-btn-secondary:hover:not(:disabled) {
+    background-color: rgba(0, 0, 0, 0.12);
+  }
+
+  .ai-selection-preview {
+    background-color: rgba(0, 0, 0, 0.05);
+  }
+
+  .ai-dialog-header {
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+  }
+
+  .ai-dialog-footer {
+    border-top-color: rgba(0, 0, 0, 0.08);
+  }
+}
+

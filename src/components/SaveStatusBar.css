@@ -1,0 +1,74 @@
+/**
+ * SaveStatusBar 样式
+ */
+
+.save-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary, #6e6e73);
+  transition: all var(--transition-fast, 180ms) ease-out;
+}
+
+.save-status-icon {
+  font-size: 10px;
+  transition: color var(--transition-fast, 180ms) ease-out;
+}
+
+.save-status-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.save-status-time {
+  opacity: 0.7;
+}
+
+.save-status-error {
+  color: var(--accent-red, #dc2626);
+}
+
+/* 状态样式 */
+
+.save-status-bar.saving {
+  color: var(--accent-blue, #2563eb);
+}
+
+.save-status-bar.saving .save-status-icon {
+  animation: spin 1s linear infinite;
+}
+
+.save-status-bar.pending {
+  color: var(--accent-orange, #f59e0b);
+}
+
+.save-status-bar.saved {
+  color: var(--accent-green, #10b981);
+}
+
+.save-status-bar.error {
+  color: var(--accent-red, #dc2626);
+}
+
+.save-status-bar.idle {
+  opacity: 0.5;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* 紧凑模式 */
+.save-status-bar.compact {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.save-status-bar.compact .save-status-time {
+  display: none;
+}
+

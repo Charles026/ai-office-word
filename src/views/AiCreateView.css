@@ -1,0 +1,177 @@
+/**
+ * AI 新建视图样式
+ */
+
+.ai-create-view {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(248, 248, 250, 0.6);
+}
+
+.ai-create-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 32px;
+  max-width: 600px;
+  width: 100%;
+}
+
+/* Logo */
+.ai-create-logo {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #8B5CF6 0%, #6366F1 100%);
+  border-radius: 16px;
+  color: white;
+}
+
+.ai-create-logo svg {
+  width: 32px;
+  height: 32px;
+}
+
+/* 搜索输入 */
+.ai-create-input-wrapper {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+}
+
+.ai-create-input {
+  flex: 1;
+  height: 48px;
+  padding: 0 20px;
+  font-size: 15px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  background: white;
+  outline: none;
+  transition: all 180ms ease-out;
+}
+
+.ai-create-input:focus {
+  border-color: #8B5CF6;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+.ai-create-input::placeholder {
+  color: #9CA3AF;
+}
+
+.ai-create-submit {
+  height: 48px;
+  padding: 0 24px;
+  font-size: 15px;
+  font-weight: 500;
+  color: white;
+  background: linear-gradient(135deg, #8B5CF6 0%, #6366F1 100%);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 180ms ease-out;
+}
+
+.ai-create-submit:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.ai-create-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 分区 */
+.ai-create-section {
+  width: 100%;
+}
+
+.ai-create-section-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+}
+
+/* 按钮组 */
+.ai-create-buttons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-create-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100px;
+  padding: 16px;
+  background: white;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 180ms ease-out;
+}
+
+.ai-create-btn:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+.ai-create-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-create-btn span {
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+}
+
+.ai-create-btn.smart {
+  border-color: rgba(139, 92, 246, 0.2);
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, rgba(99, 102, 241, 0.05) 100%);
+}
+
+.ai-create-btn.smart:hover:not(:disabled) {
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+/* Dark Mode */
+@media (prefers-color-scheme: dark) {
+  .ai-create-view {
+    background: rgba(30, 30, 34, 0.6);
+  }
+
+  .ai-create-input {
+    background: #2D2D32;
+    border-color: rgba(255, 255, 255, 0.1);
+    color: white;
+  }
+
+  .ai-create-input:focus {
+    border-color: #8B5CF6;
+  }
+
+  .ai-create-btn {
+    background: #2D2D32;
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .ai-create-btn span {
+    color: rgba(255, 255, 255, 0.9);
+  }
+}
+

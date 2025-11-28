@@ -1,0 +1,509 @@
+/**
+ * CopilotPanel 样式
+ * 
+ * ChatGPT / Gemini 风格的对话界面
+ */
+
+/* ==========================================
+   面板容器
+   ========================================== */
+
+.copilot-panel {
+  display: flex;
+  flex-direction: column;
+  width: var(--copilot-width, 380px);
+  height: 100%;
+  
+  /* 深色背景 */
+  background: var(--copilot-bg, #0c0c12);
+  
+  /* 左侧分割线 */
+  border-left: 1px solid var(--copilot-border, rgba(148, 163, 184, 0.15));
+  
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+/* ==========================================
+   头部 - 状态栏
+   ========================================== */
+
+.copilot-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  flex-shrink: 0;
+}
+
+.copilot-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.copilot-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.copilot-header-title svg {
+  color: #a78bfa;
+}
+
+/* 状态点 */
+.copilot-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-green, #22c55e);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
+}
+
+.copilot-status-dot.thinking {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(0.95); }
+}
+
+.copilot-header-context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copilot-header-context svg {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.copilot-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.copilot-header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copilot-header-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e5e7eb;
+}
+
+/* ==========================================
+   消息列表区域
+   ========================================== */
+
+.copilot-message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 自定义滚动条 */
+.copilot-message-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.copilot-message-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.copilot-message-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.copilot-message-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* 空状态 */
+.copilot-message-list-empty {
+  justify-content: center;
+  align-items: center;
+}
+
+.copilot-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 24px;
+  color: #6b7280;
+}
+
+.copilot-empty-state svg {
+  opacity: 0.3;
+  margin-bottom: 16px;
+  color: #a78bfa;
+}
+
+.copilot-empty-state p {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 6px;
+  color: #e5e7eb;
+}
+
+.copilot-empty-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
+/* ==========================================
+   消息气泡样式
+   ========================================== */
+
+.copilot-message {
+  display: flex;
+  gap: 10px;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 用户消息 - 右对齐 */
+.copilot-message-user {
+  flex-direction: row-reverse;
+}
+
+.copilot-message-user .copilot-message-bubble {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f3f4f6;
+  border-radius: 20px;
+}
+
+/* 助手消息 - 左对齐（Markdown 文本块风格） */
+.copilot-message-assistant {
+  align-items: flex-start;
+}
+
+.copilot-message-assistant .copilot-message-bubble {
+  background: transparent; /* 透明背景 */
+  color: #e5e7eb;
+  border: none;
+  padding: 0 8px; /* 稍微调整 padding */
+  max-width: 90%; /* 增加宽度 */
+}
+
+/* 头像 */
+.copilot-message-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px; /* 方形圆角头像 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 4px;
+}
+
+.copilot-message-user .copilot-message-avatar {
+  display: none; /* 隐藏用户头像，更简洁 */
+}
+
+.copilot-message-assistant .copilot-message-avatar {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.copilot-message-avatar svg {
+  color: #a78bfa;
+  width: 14px;
+  height: 14px;
+}
+
+/* 气泡内容 */
+.copilot-message-bubble {
+  max-width: 85%;
+  padding: 10px 14px;
+}
+
+.copilot-message-content {
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 打字光标 */
+.copilot-message-cursor {
+  animation: blink 1s infinite;
+  opacity: 0.8;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 0.8; }
+  51%, 100% { opacity: 0; }
+}
+
+/* 系统消息 */
+.copilot-message-system {
+  justify-content: center;
+}
+
+.copilot-message-system-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+}
+
+/* ==========================================
+   Action 消息 - 操作卡片
+   ========================================== */
+
+.copilot-message-action {
+  justify-content: flex-start;
+  padding-left: 38px; /* 对齐助手消息 */
+}
+
+.copilot-message-action-card {
+  width: 100%;
+  max-width: 280px;
+  padding: 12px 14px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.copilot-message-action-card:hover {
+  background: rgba(139, 92, 246, 0.12);
+}
+
+.copilot-message-action-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #a78bfa;
+  margin-bottom: 6px;
+}
+
+.action-type {
+  color: #a78bfa;
+}
+
+.action-target {
+  color: #6b7280;
+  font-weight: 400;
+}
+
+.copilot-message-action-content {
+  font-size: 13px;
+  color: #d1d5db;
+  line-height: 1.5;
+}
+
+/* 状态标签 */
+.copilot-message-action-status {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 10px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.copilot-message-action-status.status-pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.copilot-message-action-status.status-applied {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.copilot-message-action-status.status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.copilot-message-action-status.status-reverted {
+  background: rgba(156, 163, 175, 0.15);
+  color: #9ca3af;
+}
+
+/* 撤销按钮 */
+.copilot-undo-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 10px;
+  margin-left: 8px;
+  font-size: 11px;
+  color: #6b7280;
+  cursor: pointer;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 4px 10px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.copilot-undo-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+/* 加载状态 - 思考动画 */
+.copilot-typing-indicator {
+  display: flex;
+  gap: 5px;
+  padding: 8px 0;
+}
+
+.copilot-typing-indicator span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+  animation: typing 1.4s infinite ease-in-out both;
+}
+
+.copilot-typing-indicator span:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.copilot-typing-indicator span:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes typing {
+  0%, 80%, 100% {
+    transform: scale(0.7);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* ==========================================
+   输入区域 - ChatGPT 风格
+   ========================================== */
+
+.copilot-input {
+  padding: 12px 16px 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  flex-shrink: 0;
+}
+
+.copilot-input-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  transition: all 0.2s ease;
+}
+
+.copilot-input-container:focus-within {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(139, 92, 246, 0.4);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+}
+
+.copilot-input-textarea {
+  flex: 1;
+  min-height: 22px;
+  max-height: 120px;
+  border: none;
+  background: transparent;
+  color: #e5e7eb;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  font-family: inherit;
+}
+
+.copilot-input-textarea::placeholder {
+  color: #6b7280;
+}
+
+/* 发送按钮 */
+.copilot-input-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: #6b7280;
+  cursor: not-allowed;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.copilot-input-send.active {
+  background: linear-gradient(135deg, #8b5cf6 0%, #a78bfa 100%);
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
+}
+
+.copilot-input-send.active:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);
+}
+
+/* 输入提示 */
+.copilot-input-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #4b5563;
+  text-align: center;
+}
+

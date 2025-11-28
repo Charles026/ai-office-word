@@ -1,0 +1,286 @@
+/**
+ * 传统文档管理视图样式
+ */
+
+.doc-manager-view {
+  flex: 1;
+  display: flex;
+  background: rgba(248, 248, 250, 0.6);
+}
+
+/* 左侧空间/目录 */
+.doc-manager-sidebar {
+  width: 200px;
+  padding: 16px;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.doc-manager-sidebar-section {
+  margin-bottom: 20px;
+}
+
+.doc-manager-sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+}
+
+.doc-manager-sidebar-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.doc-manager-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+  transition: all 150ms ease-out;
+}
+
+.doc-manager-sidebar-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.doc-manager-sidebar-item.active {
+  background: rgba(0, 122, 255, 0.1);
+  color: #007AFF;
+}
+
+/* 右侧主区域 */
+.doc-manager-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 工具栏 */
+.doc-manager-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.doc-manager-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1F2937;
+  margin: 0;
+}
+
+.doc-manager-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.doc-manager-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #6B7280;
+  cursor: pointer;
+  transition: all 150ms ease-out;
+}
+
+.doc-manager-action-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.06);
+  color: #374151;
+}
+
+.doc-manager-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 表格头 */
+.doc-manager-table-header {
+  display: flex;
+  align-items: center;
+  padding: 8px 20px;
+  background: rgba(0, 0, 0, 0.02);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 12px;
+  font-weight: 500;
+  color: #6B7280;
+}
+
+/* 列 */
+.doc-col {
+  flex-shrink: 0;
+}
+
+.doc-col-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.doc-col-date {
+  width: 120px;
+  text-align: left;
+}
+
+.doc-col-size {
+  width: 80px;
+  text-align: right;
+}
+
+.doc-col-actions {
+  width: 40px;
+  display: flex;
+  justify-content: center;
+}
+
+/* 文档列表 */
+.doc-manager-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.doc-manager-row {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  transition: all 100ms ease-out;
+}
+
+.doc-manager-row:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.doc-manager-row.selected {
+  background: rgba(0, 122, 255, 0.08);
+}
+
+.doc-icon {
+  flex-shrink: 0;
+}
+
+.doc-name {
+  font-size: 14px;
+  color: #1F2937;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.doc-manager-row .doc-col-date,
+.doc-manager-row .doc-col-size {
+  font-size: 13px;
+  color: #6B7280;
+}
+
+.doc-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #9CA3AF;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 150ms ease-out;
+}
+
+.doc-manager-row:hover .doc-action-btn {
+  opacity: 1;
+}
+
+.doc-action-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #EF4444;
+}
+
+/* 状态 */
+.doc-manager-loading,
+.doc-manager-error,
+.doc-manager-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: #6B7280;
+}
+
+.doc-manager-error {
+  color: #EF4444;
+}
+
+.doc-manager-empty-hint {
+  font-size: 13px;
+  margin-top: 8px;
+  opacity: 0.7;
+}
+
+/* Dark Mode */
+@media (prefers-color-scheme: dark) {
+  .doc-manager-view {
+    background: rgba(30, 30, 34, 0.6);
+  }
+
+  .doc-manager-sidebar {
+    background: rgba(40, 40, 44, 0.5);
+    border-right-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .doc-manager-sidebar-item {
+    color: rgba(255, 255, 255, 0.8);
+  }
+
+  .doc-manager-sidebar-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .doc-manager-title {
+    color: white;
+  }
+
+  .doc-manager-toolbar,
+  .doc-manager-table-header {
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .doc-manager-table-header {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .doc-manager-row {
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+  }
+
+  .doc-manager-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .doc-manager-row.selected {
+    background: rgba(0, 122, 255, 0.15);
+  }
+
+  .doc-name {
+    color: rgba(255, 255, 255, 0.9);
+  }
+}
+

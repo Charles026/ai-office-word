@@ -1,0 +1,123 @@
+/**
+ * ConfirmDialog 样式
+ */
+
+.confirm-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal, 1000);
+  animation: fadeIn 150ms ease-out;
+}
+
+.confirm-dialog {
+  background: var(--overlay-bg, rgba(255, 255, 255, 0.95));
+  backdrop-filter: blur(var(--overlay-blur, 32px)) saturate(180%);
+  border-radius: var(--overlay-radius, 16px);
+  box-shadow:
+    0 24px 80px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.6);
+  width: 100%;
+  max-width: 420px;
+  margin: 16px;
+  animation: slideUp 200ms ease-out;
+}
+
+.confirm-dialog-header {
+  padding: 20px 24px 12px;
+}
+
+.confirm-dialog-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary, #1d1d1f);
+}
+
+.confirm-dialog-body {
+  padding: 0 24px 20px;
+}
+
+.confirm-dialog-description {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-secondary, #6e6e73);
+}
+
+.confirm-dialog-description ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.confirm-dialog-description li {
+  margin-bottom: 4px;
+}
+
+.confirm-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 24px 20px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.confirm-dialog-btn {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast, 180ms) ease-out;
+}
+
+.confirm-dialog-btn-cancel {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary, #1d1d1f);
+}
+
+.confirm-dialog-btn-cancel:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.confirm-dialog-btn-confirm {
+  background: #2563eb;
+  color: white;
+}
+
+.confirm-dialog-btn-confirm:hover {
+  background: #1d4ed8;
+}
+
+.confirm-dialog-btn-confirm.danger {
+  background: #dc2626;
+}
+
+.confirm-dialog-btn-confirm.danger:hover {
+  background: #b91c1c;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

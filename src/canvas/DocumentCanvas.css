@@ -1,0 +1,208 @@
+/* ==========================================
+   DocumentCanvas - 文档画布样式
+   ========================================== */
+
+.document-canvas {
+  flex: 1;
+  overflow-y: auto;
+  background: transparent;
+}
+
+.document-content {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 40px;
+  min-height: 100%;
+}
+
+/* ==========================================
+   块级元素
+   ========================================== */
+
+.doc-block {
+  position: relative;
+  margin-bottom: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  outline: none;
+  transition: background 0.15s;
+}
+
+.doc-block:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.doc-block.selected {
+  background: rgba(0, 122, 255, 0.06);
+}
+
+.doc-block.selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  background: var(--accent-blue, #007aff);
+  border-radius: 0 2px 2px 0;
+}
+
+/* 活跃 block（有光标） */
+.doc-block.active {
+  background: rgba(0, 0, 0, 0.01);
+}
+
+/* 段落 */
+.doc-block.paragraph {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+/* 标题 */
+.doc-block.heading {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 16px;
+}
+
+.doc-block.heading h1 {
+  font-size: 28px;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.doc-block.heading h2 {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.doc-block.heading h3 {
+  font-size: 18px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* 列表项 */
+.doc-block.listitem {
+  padding-left: 24px;
+}
+
+.doc-block.list-item::after {
+  content: '•';
+  position: absolute;
+  left: 8px;
+  color: var(--text-secondary);
+}
+
+/* 列表 */
+.doc-block.list {
+  padding-left: 24px;
+}
+
+.doc-block.list li {
+  margin: 4px 0;
+}
+
+/* 占位符 */
+.doc-block.placeholder {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px dashed rgba(0, 0, 0, 0.1);
+  padding: 16px;
+  text-align: center;
+}
+
+.placeholder-content {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* ==========================================
+   文本样式
+   ========================================== */
+
+.text-run {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.text-run.bold {
+  font-weight: 600;
+}
+
+.text-run.italic {
+  font-style: italic;
+}
+
+.text-run.underline {
+  text-decoration: underline;
+}
+
+/* 占位符 */
+.block-placeholder {
+  color: var(--text-tertiary, #8e8e93);
+  font-style: italic;
+}
+
+/* ==========================================
+   选区高亮（AST 驱动，不依赖浏览器 selection）
+   ========================================== */
+
+.selection-highlight {
+  background-color: rgba(0, 122, 255, 0.25);
+  border-radius: 2px;
+}
+
+/* 空行占位符 */
+.empty-line {
+  display: inline-block;
+  min-height: 1.6em;
+}
+
+/* block 内容区 */
+.block-content {
+  outline: none;
+  min-height: 1.6em;
+}
+
+/* 链接样式 */
+.doc-link {
+  color: var(--accent-blue, #007aff);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.doc-link:hover {
+  text-decoration: none;
+}
+
+/* ==========================================
+   ContentEditable 样式
+   ========================================== */
+
+[contenteditable] {
+  outline: none;
+  min-height: 1.6em;
+}
+
+[contenteditable]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text-tertiary, #8e8e93);
+  pointer-events: none;
+}
+
+/* ==========================================
+   Dark Mode
+   ========================================== */
+
+@media (prefers-color-scheme: dark) {
+  .doc-block:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .doc-block.selected {
+    background: rgba(0, 122, 255, 0.1);
+  }
+}
+

@@ -1,0 +1,166 @@
+/**
+ * AiSectionActions 样式
+ */
+
+.ai-section-actions {
+  position: relative;
+  display: inline-block;
+}
+
+/* 触发按钮 */
+.ai-section-actions-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.1), rgba(59, 130, 246, 0.1));
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary, #1d1d1f);
+  transition: all var(--transition-fast, 180ms) ease-out;
+}
+
+.ai-section-actions-trigger:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.15), rgba(59, 130, 246, 0.15));
+}
+
+.ai-section-actions-trigger.active {
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(59, 130, 246, 0.2));
+}
+
+.ai-section-actions-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-section-actions-trigger.processing {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.ai-section-actions-icon {
+  font-size: 14px;
+}
+
+.ai-section-actions-label {
+  white-space: nowrap;
+}
+
+.ai-section-actions-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--transition-fast, 180ms) ease-out;
+}
+
+.ai-section-actions-trigger.active .ai-section-actions-arrow {
+  transform: rotate(180deg);
+}
+
+/* 下拉菜单 */
+.ai-section-actions-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 160px;
+  background: var(--overlay-bg, rgba(255, 255, 255, 0.95));
+  backdrop-filter: blur(var(--overlay-blur, 32px)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--overlay-blur, 32px)) saturate(180%);
+  border-radius: var(--overlay-radius, 10px);
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.6);
+  padding: 4px;
+  z-index: var(--z-dropdown, 1000);
+  animation: dropdownFadeIn 0.15s ease-out;
+}
+
+@keyframes dropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 菜单项 */
+.ai-section-actions-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary, #1d1d1f);
+  transition: all var(--transition-fast, 180ms) ease-out;
+  text-align: left;
+}
+
+.ai-section-actions-item:hover {
+  background: rgba(0, 122, 255, 0.08);
+}
+
+.ai-section-actions-item:active {
+  background: rgba(0, 122, 255, 0.12);
+  transform: scale(0.98);
+}
+
+.ai-section-actions-item-icon {
+  font-size: 14px;
+  width: 20px;
+  text-align: center;
+}
+
+.ai-section-actions-item-label {
+  font-weight: 500;
+}
+
+/* 深色模式 */
+@media (prefers-color-scheme: dark) {
+  .ai-section-actions-trigger {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.2), rgba(59, 130, 246, 0.2));
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .ai-section-actions-trigger:hover:not(:disabled) {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.25), rgba(59, 130, 246, 0.25));
+  }
+
+  .ai-section-actions-trigger.active {
+    background: linear-gradient(135deg, rgba(147, 51, 234, 0.3), rgba(59, 130, 246, 0.3));
+  }
+
+  .ai-section-actions-dropdown {
+    background: rgba(40, 40, 45, 0.95);
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+
+  .ai-section-actions-item {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .ai-section-actions-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+

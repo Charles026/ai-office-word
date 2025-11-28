@@ -1,0 +1,252 @@
+/* ==========================================
+   DocEditor - TipTap 富文本编辑器样式
+   ========================================== */
+
+.doc-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: transparent;
+}
+
+/* 加载状态 */
+.doc-editor-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* ==========================================
+   工具栏
+   ========================================== */
+
+.doc-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(255, 255, 255, 0.5);
+  flex-shrink: 0;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: rgba(0, 0, 0, 0.1);
+  margin: 0 8px;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.toolbar-filename {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-right: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 工具栏按钮 */
+.toolbar-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.toolbar-button:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--text-primary);
+}
+
+.toolbar-button.active {
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--accent-blue, #007aff);
+}
+
+.toolbar-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbar-button-text {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ==========================================
+   编辑器内容区
+   ========================================== */
+
+.doc-editor-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+
+/* TipTap 编辑器内容样式 */
+.doc-editor-content {
+  outline: none;
+  min-height: 100%;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.doc-editor-content:focus {
+  outline: none;
+}
+
+/* Placeholder */
+.doc-editor-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--text-tertiary, #8e8e93);
+  pointer-events: none;
+  height: 0;
+}
+
+/* 段落 */
+.doc-editor-content p {
+  margin: 0 0 1em 0;
+}
+
+/* 标题 */
+.doc-editor-content h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 1.5em 0 0.5em 0;
+  line-height: 1.3;
+}
+
+.doc-editor-content h2 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 1.3em 0 0.5em 0;
+  line-height: 1.3;
+}
+
+.doc-editor-content h3 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 1.2em 0 0.5em 0;
+  line-height: 1.3;
+}
+
+/* 列表 */
+.doc-editor-content ul,
+.doc-editor-content ol {
+  margin: 0 0 1em 0;
+  padding-left: 24px;
+}
+
+.doc-editor-content li {
+  margin: 0.3em 0;
+}
+
+/* 粗体和斜体 */
+.doc-editor-content strong {
+  font-weight: 600;
+}
+
+.doc-editor-content em {
+  font-style: italic;
+}
+
+/* 代码块 */
+.doc-editor-content code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.doc-editor-content pre {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
+.doc-editor-content pre code {
+  background: none;
+  padding: 0;
+}
+
+/* 引用块 */
+.doc-editor-content blockquote {
+  border-left: 3px solid rgba(0, 0, 0, 0.1);
+  padding-left: 16px;
+  margin: 1em 0;
+  color: var(--text-secondary);
+}
+
+/* 分割线 */
+.doc-editor-content hr {
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  margin: 2em 0;
+}
+
+/* ==========================================
+   Dark Mode
+   ========================================== */
+
+@media (prefers-color-scheme: dark) {
+  .doc-editor-toolbar {
+    background: rgba(0, 0, 0, 0.2);
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+  }
+
+  .toolbar-divider {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .toolbar-button:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .toolbar-button.active {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .doc-editor-content code {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .doc-editor-content pre {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .doc-editor-content blockquote {
+    border-left-color: rgba(255, 255, 255, 0.15);
+  }
+
+  .doc-editor-content hr {
+    border-top-color: rgba(255, 255, 255, 0.1);
+  }
+}
+

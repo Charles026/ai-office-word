@@ -1,0 +1,180 @@
+/**
+ * RecoveryDialog 样式
+ */
+
+.recovery-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal, 1000);
+  animation: fadeIn 150ms ease-out;
+}
+
+.recovery-dialog {
+  background: var(--overlay-bg, rgba(255, 255, 255, 0.95));
+  backdrop-filter: blur(var(--overlay-blur, 32px)) saturate(180%);
+  border-radius: var(--overlay-radius, 16px);
+  box-shadow:
+    0 24px 80px rgba(15, 23, 42, 0.15),
+    0 0 0 1px rgba(255, 255, 255, 0.6);
+  width: 100%;
+  max-width: 480px;
+  margin: 16px;
+  animation: slideUp 200ms ease-out;
+}
+
+.recovery-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 24px 12px;
+}
+
+.recovery-dialog-icon {
+  font-size: 24px;
+}
+
+.recovery-dialog-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary, #1d1d1f);
+}
+
+.recovery-dialog-body {
+  padding: 0 24px 16px;
+}
+
+.recovery-dialog-description {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--text-secondary, #6e6e73);
+}
+
+.recovery-dialog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.recovery-dialog-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+}
+
+.recovery-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  margin-right: 12px;
+}
+
+.recovery-item-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary, #1d1d1f);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recovery-item-path {
+  font-size: 11px;
+  color: var(--text-secondary, #6e6e73);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recovery-item-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.recovery-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 24px 20px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.recovery-btn {
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast, 180ms) ease-out;
+}
+
+.recovery-btn-recover {
+  background: var(--accent-blue, #2563eb);
+  color: white;
+}
+
+.recovery-btn-recover:hover {
+  background: #1d4ed8;
+}
+
+.recovery-btn-ignore {
+  background: transparent;
+  color: var(--text-secondary, #6e6e73);
+}
+
+.recovery-btn-ignore:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.recovery-btn-secondary {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text-primary, #1d1d1f);
+}
+
+.recovery-btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.recovery-btn-primary {
+  background: var(--accent-blue, #2563eb);
+  color: white;
+}
+
+.recovery-btn-primary:hover {
+  background: #1d4ed8;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

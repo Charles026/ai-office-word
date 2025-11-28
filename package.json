@@ -1,0 +1,56 @@
+{
+  "name": "ai-libre",
+  "version": "1.0.0",
+  "description": "AI Office - 液态玻璃桌面应用",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "sleep 2 && tsc -p tsconfig.electron.json && NODE_ENV=development electron .",
+    "build": "tsc -p tsconfig.electron.json && vite build",
+    "preview": "vite preview",
+    "start": "electron .",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "electron",
+    "react",
+    "ai-office",
+    "liquid-glass"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^2.1.9",
+    "concurrently": "^9.1.0",
+    "electron": "^33.2.0",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.1",
+    "vitest": "^2.1.9"
+  },
+  "dependencies": {
+    "@lexical/history": "^0.38.2",
+    "@lexical/html": "^0.38.2",
+    "@lexical/react": "^0.38.2",
+    "@lexical/rich-text": "^0.38.2",
+    "@lexical/selection": "^0.38.2",
+    "@lexical/utils": "^0.38.2",
+    "@tiptap/extension-placeholder": "^3.11.0",
+    "@tiptap/pm": "^3.11.0",
+    "@tiptap/react": "^3.11.0",
+    "@tiptap/starter-kit": "^3.11.0",
+    "docx": "^9.5.1",
+    "dotenv": "^17.2.3",
+    "htmlparser2": "^10.0.0",
+    "lexical": "^0.38.2",
+    "lucide-react": "^0.555.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^4.1.13"
+  }
+}

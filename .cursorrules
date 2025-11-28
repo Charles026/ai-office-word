@@ -1,0 +1,219 @@
+# AI Office - Liquid Glass Design System Rules
+
+当为本项目生成 JSX/CSS/TSX 时，必须遵守以下设计系统约束。
+
+---
+
+## 1. 结构层级（必须遵守）
+
+React 结构固定为：
+
+```
+.ai-shell                    // 外层 Liquid Glass 窗口壳
+├── .ai-top-chrome           // 顶部工具栏（标题/搜索/命令）
+└── .ai-body                 // 主区域（grid 布局）
+    ├── .ai-sidebar          // 左侧 80–96px 导航槽位
+    └── .ai-canvas           // 主内容画布
+        └── [所有新 UI]      // AI 面板、命令面板等都在此内部
+```
+
+**规则**：
+- 任何新 UI 组件（对话框、面板、悬浮层）都挂在 `.ai-canvas` 内部
+- 新组件继承 canvas 材质规则，不能自创一套完全不兼容的玻璃参数
+
+---
+
+## 2. 材质原则（Liquid Glass Tokens）
+
+### 2.1 Shell 层（系统级玻璃）
+
+```css
+.ai-shell {
+  /* ❌ 禁止：大面积自定义渐变背景 */
+  /* ✅ 正确：中性 tint + 系统 vibrancy */
+  background-color: transparent;
+  
+  /* Liquid Glass 折射 + 模糊 */
+  backdrop-filter: url(#aiOfficeLiquidGlassShell) blur(18px) saturate(160%);
+  -webkit-backdrop-filter: url(#aiOfficeLiquidGlassShell) blur(18px) saturate(160%);
+  
+  /* 圆角约 24px */
+  border-radius: 24px;
+  
+  /* 内高光 + 外阴影，强化"厚玻璃"体积感 */
+  box-shadow:
+    0 18px 45px rgba(15, 23, 42, 0.11),
+    0 0 1px rgba(15, 23, 42, 0.16);
+}
+```
+
+### 2.2 Canvas 层（纸张 + 玻璃边缘）
+
+```css
+.ai-canvas {
+  /* 高不透明度近白纸张色 */
+  background-color: rgba(252, 252, 255, 0.94);
+  
+  /* 边缘折射，中央平静 */
+  backdrop-filter: url(#aiOfficeLiquidGlassCanvas) blur(24px) saturate(180%);
+  -webkit-backdrop-filter: url(#aiOfficeLiquidGlassCanvas) blur(24px) saturate(180%);
+  
+  /* 圆角略小于 shell */
+  border-radius: 20px;
+  
+  /* 阴影比 shell 更轻 */
+  box-shadow:
+    0 20px 60px rgba(15, 23, 42, 0.04),
+    0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+```
+
+### 2.3 浮层（对话框/Command Palette）
+
+```css
+.ai-overlay {
+  /* blur 更强，不透明度更高 */
+  background-color: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(32px) saturate(180%);
+  border-radius: 16px;
+  box-shadow:
+    0 24px 80px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+```
+
+---
+
+## 3. 层级与对比度
+
+**内容优先原则**：
+- Shell：承载导航、Chrome 元素，可更有玻璃感
+- Canvas：承载实际文档/编辑 UI，玻璃感减弱，以可读性为主
+- 浮层：比 canvas blur 更强、不透明度更高
+
+**对比度要求**：
+- 所有文字/图标在玻璃或半透明背景上时，对比度 ≥ 4.5:1
+- ❌ 禁止：浅灰细字 + 高透明度背景
+- ✅ 正确：深色文字（#1d1d1f）或使用足够对比度的颜色
+
+---
+
+## 4. 交互与动效
+
+**动画风格：湿但不软，避免果冻感**
+
+```css
+/* 标准过渡 */
+transition: all 200ms ease-out;
+
+/* 时长范围：180–260ms */
+/* 位移和 scale 变化幅度小 */
+```
+
+**聚焦状态**：
+- 活跃的 canvas/浮层：轻微变亮，blur 变弱
+- 背后 shell：轻微变暗，blur 变强
+
+**禁止**：
+- ❌ 大幅 Q 弹/果冻动效
+- ❌ 弹性过度的 spring 动画
+- ❌ 超过 300ms 的动画时长
+
+---
+
+## 5. 可访问性 / reduceTransparency 模式
+
+必须支持全局布尔变量 `reduceTransparency`：
+
+```css
+/* reduceTransparency: true 时 */
+.ai-shell {
+  background-color: #F2F2F7; /* 浅模式 */
+  /* background-color: #202124; // 深模式 */
+  backdrop-filter: none;
+}
+
+.ai-canvas {
+  background-color: #FFFFFF;
+  backdrop-filter: none;
+}
+
+/* 阴影和描边保留，以维持层级 */
+```
+
+**规则**：任何新 CSS/组件使用玻璃效果时，必须提供无玻璃 fallback。
+
+---
+
+## 6. 禁止模式（代码审查红线）
+
+以下情况必须修改：
+
+| 禁止项 | 原因 |
+|--------|------|
+| Shell/Canvas 内大面积明显渐变背景 | 违反材质原则 |
+| 在纯玻璃上直接承载长文/表格正文 | 可读性差 |
+| 超大 blur（>40px）或 displacement（>60）| 背景变噪点 |
+| 大幅 Q 弹/果冻动效 | 违反动效原则 |
+| 自创与 tokens 不兼容的玻璃参数 | 破坏系统一致性 |
+| 浅灰细字 + 高透明度背景 | 对比度不足 |
+
+---
+
+## 7. Design Tokens 速查
+
+```css
+:root {
+  /* Shell */
+  --shell-radius: 24px;
+  --shell-blur: 18px;
+  --shell-saturate: 160%;
+  --shell-filter: url(#aiOfficeLiquidGlassShell);
+  
+  /* Canvas */
+  --canvas-radius: 20px;
+  --canvas-blur: 24px;
+  --canvas-saturate: 180%;
+  --canvas-filter: url(#aiOfficeLiquidGlassCanvas);
+  --canvas-bg: rgba(252, 252, 255, 0.94);
+  
+  /* Overlay */
+  --overlay-radius: 16px;
+  --overlay-blur: 32px;
+  --overlay-bg: rgba(255, 255, 255, 0.92);
+  
+  /* Animation */
+  --transition-fast: 180ms ease-out;
+  --transition-normal: 200ms ease-out;
+  --transition-slow: 260ms ease-out;
+  
+  /* Typography */
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  
+  /* Spacing */
+  --sidebar-width-min: 80px;
+  --sidebar-width-max: 96px;
+  --topbar-height: 42px;
+  --content-gap: 12px;
+  
+  /* Reduced Transparency Fallback */
+  --shell-fallback-light: #F2F2F7;
+  --shell-fallback-dark: #202124;
+  --canvas-fallback: #FFFFFF;
+}
+```
+
+---
+
+## 执行检查清单
+
+生成新组件时，按以下顺序检查：
+
+1. [ ] 组件属于哪一层？（Shell / Canvas / 浮层）
+2. [ ] 使用对应层级的 blur、opacity、radius、tint
+3. [ ] 文字对比度 ≥ 4.5:1？
+4. [ ] 动画时长在 180–260ms 范围内？
+5. [ ] 是否提供 reduceTransparency fallback？
+6. [ ] 没有违反禁止模式？
+

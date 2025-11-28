@@ -1,0 +1,950 @@
+/* ==========================================
+   AI Office - Liquid Glass Design System
+   Arc 风格纵向 Tab 布局
+   ========================================== */
+
+:root {
+  /* ==========================================
+     Dark Mode First - 深色工作区设计
+     ========================================== */
+  
+  /* App Background - 深蓝黑色工作区 */
+  --app-bg: #0a0a0f;
+  --app-bg-elevated: #0f1117;
+  
+  /* Shell glass tokens */
+  --glass-shell-radius: 24px;
+  --glass-shell-blur: 18px;
+  --glass-shell-opacity: 0.78;
+  --glass-shell-tint: rgba(10, 10, 15, 0.85);
+
+  /* Sidebar - 略亮的深色 */
+  --sidebar-width: 220px;
+  --sidebar-bg: rgba(255, 255, 255, 0.04);
+
+  /* Canvas (content sheet) - 纯白纸张 */
+  --glass-canvas-radius: 16px;
+  --glass-canvas-blur: 24px;
+  --glass-canvas-opacity: 0.96;
+  --canvas-base-color: 253, 253, 252;
+  
+  /* Paper - 白色纸张 */
+  --paper-bg: #fdfdfc;
+  --paper-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --paper-radius: 12px;
+  --paper-max-width: 860px;
+
+  /* Layout */
+  --top-chrome-height: 42px;
+  
+  /* Copilot Panel */
+  --copilot-width: 380px;
+  --copilot-bg: #0c0c12;
+  --copilot-border: rgba(148, 163, 184, 0.15);
+
+  /* Typography - 对比度优化 */
+  --text-primary: #e5e7eb;
+  --text-primary-on-paper: #1d1d1f;
+  --text-secondary: #9ca3af;
+  --text-secondary-on-paper: #6e6e73;
+  --text-tertiary: #6b7280;
+
+  /* Colors */
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --word-blue: #2B579A;
+  --status-green: #22c55e;
+
+  /* Animation */
+  --transition-fast: 150ms ease-out;
+  --transition-normal: 200ms ease-out;
+  --transition-slow: 260ms ease-out;
+
+  /* Reduced transparency fallback */
+  --shell-fallback-light: #F2F2F7;
+  --shell-fallback-dark: #1c1c1e;
+  --canvas-fallback: #FFFFFF;
+
+  /* ==========================================
+     Z-Index 层级系统
+     ==========================================
+     层级设计原则：
+     - 基础内容层 (1-99): 正常文档内容
+     - 固定 UI 层 (100-199): Ribbon, Sidebar
+     - 浮层/下拉层 (1000-1999): Dropdown, Popover, Tooltip
+     - 模态层 (2000-2999): Modal, Dialog
+     - 通知层 (3000-3999): Toast, Notification
+     - 最高层 (9999): 调试工具、紧急覆盖
+     ========================================== */
+  --z-base: 1;
+  --z-ribbon: 100;
+  --z-sidebar: 100;
+  --z-dropdown: 1000;
+  --z-popover: 1100;
+  --z-tooltip: 1200;
+  --z-modal-backdrop: 2000;
+  --z-modal: 2100;
+  --z-toast: 3000;
+  --z-max: 9999;
+}
+
+/* 基础填满窗口 */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  color: var(--text-primary);
+}
+
+/* ==========================================
+   Shell Layer - 深色工作区壳
+   ========================================== */
+.ai-shell {
+  position: fixed;
+  inset: 0;
+  border-radius: var(--glass-shell-radius);
+  overflow: hidden;
+  
+  /* 深色工作区背景 */
+  background: var(--app-bg);
+  
+  /* 边缘微光 */
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================
+   Top Chrome - 顶部工具栏 (42pt)
+   ========================================== */
+.ai-top-chrome {
+  height: var(--top-chrome-height);
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+
+.ai-top-chrome-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-top-chrome-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+/* Copilot 切换按钮 */
+.copilot-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 20px;
+  background: rgba(139, 92, 246, 0.12);
+  color: #a78bfa;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.copilot-toggle-btn:hover {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+}
+
+.copilot-toggle-btn.active {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3) 0%, rgba(167, 139, 250, 0.3) 100%);
+  color: #e9d5ff;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.2);
+}
+
+.copilot-toggle-btn svg {
+  flex-shrink: 0;
+}
+
+.traffic-light-spacer {
+  width: 68px;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.ai-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e5e7eb;
+  letter-spacing: -0.2px;
+}
+
+/* ==========================================
+   Body - 主体区域（三栏布局）
+   ========================================== */
+.ai-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  padding: 0 0 12px 12px;
+  gap: 0;
+  background: var(--app-bg);
+}
+
+/* ==========================================
+   Sidebar - 左侧导航栏 (Arc 风格)
+   ========================================== */
+.ai-sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  border-radius: 12px;
+  padding: 12px 8px;
+  box-sizing: border-box;
+  margin-right: 12px;
+}
+
+/* 顶部操作区 */
+.sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-action:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.sidebar-action:active {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sidebar-action-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-secondary);
+}
+
+.sidebar-action-label {
+  flex: 1;
+}
+
+/* 分隔线 */
+.sidebar-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 12px 10px;
+}
+
+/* 主导航 */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--transition-fast), color var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.nav-item.active {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
+}
+
+.nav-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.nav-item-label {
+  flex: 1;
+}
+
+/* AI 架构分组 */
+.sidebar-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px 10px 6px;
+}
+
+/* 文件 Tab 列表 */
+.file-tab-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.file-tab-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.file-tab-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-tab-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.file-tab-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  transition: background var(--transition-fast);
+  position: relative;
+}
+
+.file-tab-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.file-tab-item.active {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.file-tab-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  background: var(--accent-blue);
+  border-radius: 0 2px 2px 0;
+}
+
+.file-tab-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.file-tab-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.file-tab-dirty {
+  color: #f97316;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.file-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all var(--transition-fast);
+}
+
+.file-tab-item:hover .file-tab-close {
+  opacity: 1;
+}
+
+.file-tab-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.file-tab-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* 底部个人入口 */
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #34c759 0%, #30d158 100%);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+  margin-left: 10px;
+}
+
+.user-avatar:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(52, 199, 89, 0.4);
+}
+
+/* ==========================================
+   Canvas Layer - 中间主内容区（透明容器）
+   ========================================== */
+.ai-canvas {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  
+  /* 透明背景，让 DocumentSurface 处理纸张效果 */
+  background: transparent;
+  
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================
+   Canvas 空状态
+   ========================================== */
+.canvas-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.canvas-empty-state svg {
+  margin-bottom: 20px;
+  opacity: 0.8;
+}
+
+.canvas-empty-state h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.canvas-empty-state p {
+  font-size: 14px;
+  margin: 0 0 24px 0;
+  color: var(--text-secondary);
+}
+
+/* 主按钮 */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 10px;
+  background: var(--word-blue);
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.btn-primary:hover {
+  background: #1e4a8a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(43, 87, 154, 0.3);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.btn-secondary:active {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.empty-state-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+/* ==========================================
+   Canvas 文档视图
+   ========================================== */
+.canvas-document-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+
+.document-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.document-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.document-path {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0 0 24px 0;
+  max-width: 500px;
+  word-break: break-all;
+}
+
+.document-placeholder {
+  max-width: 400px;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 12px;
+}
+
+.document-placeholder p {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ==========================================
+   Canvas 警告状态（LibreOffice 未安装）
+   ========================================== */
+
+.canvas-warning-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+
+.canvas-warning-state svg {
+  margin-bottom: 20px;
+}
+
+.canvas-warning-state h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.canvas-warning-state p {
+  font-size: 14px;
+  margin: 0 0 16px 0;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.warning-hint {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.warning-hint a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+
+.warning-hint a:hover {
+  text-decoration: underline;
+}
+
+.warning-file-info {
+  margin-top: 24px;
+  padding: 16px 20px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  font-size: 13px;
+  text-align: left;
+  max-width: 400px;
+}
+
+.warning-file-path {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  word-break: break-all;
+}
+
+/* ==========================================
+   Canvas 加载状态
+   ========================================== */
+
+.canvas-loading-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-secondary);
+}
+
+.canvas-loading-state p {
+  font-size: 14px;
+  margin: 16px 0 0 0;
+}
+
+.loading-spinner {
+  color: var(--accent-blue);
+}
+
+/* ==========================================
+   Canvas 错误状态
+   ========================================== */
+
+.canvas-error-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+
+.canvas-error-state svg {
+  margin-bottom: 20px;
+}
+
+.canvas-error-state h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.canvas-error-state p {
+  font-size: 14px;
+  margin: 0 0 8px 0;
+  color: var(--text-secondary);
+}
+
+.error-details {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 8px 0 24px 0;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  max-width: 400px;
+  word-break: break-all;
+}
+
+.error-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* 次要按钮 */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-secondary:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+/* ==========================================
+   降低透明度模式
+   ========================================== */
+html[data-reduce-transparency='true'] .ai-shell {
+  background-color: var(--shell-fallback-dark);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-reduce-transparency='true'] .ai-sidebar {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+html[data-reduce-transparency='true'] .ai-canvas {
+  background-color: var(--canvas-fallback);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .ai-shell {
+    background-color: var(--shell-fallback-light);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .ai-sidebar {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  .ai-canvas {
+    background-color: var(--canvas-fallback);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* ==========================================
+   Dark Mode
+   ========================================== */
+/* ==========================================
+   Editor View - Ribbon + Document Workspace
+   在红框区域内部
+   ========================================== */
+
+.editor-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Ribbon Zone - 固定在红框顶部 */
+.ribbon-zone {
+  flex-shrink: 0;
+  background: var(--glass-canvas-opacity, rgba(252, 252, 255, 0.96));
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: var(--z-ribbon, 100);
+}
+
+/* Document Workspace with Outline - Ribbon 下方，包含 Outline + 编辑区 */
+.document-workspace-with-outline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Document Workspace - 编辑区滚动容器 */
+.document-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  /* 顶部留空，营造"页边距"感 */
+  padding-top: 24px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ribbon-zone {
+    background: rgba(38, 38, 40, 0.98);
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ==========================================
+   Ribbon Zone
+   ========================================== */
+
+.ribbon-zone {
+  display: flex;
+  align-items: flex-start;
+  background: rgba(38, 38, 42, 0.98);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ribbon-zone > .ribbon {
+  flex: 1;
+  border-bottom: none;
+}
+
+.ribbon-section-ai {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  height: 100%;
+}
+
+/* ==========================================
+   Dark Mode
+   ========================================== */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text-primary: #f5f5f7;
+    --text-secondary: #a1a1a6;
+    --text-tertiary: #8e8e93;
+    --glass-shell-tint: rgba(0, 0, 0, 0.5);
+    --sidebar-bg: rgba(255, 255, 255, 0.06);
+    --canvas-base-color: 38, 38, 40;
+  }
+
+  .sidebar-action:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .sidebar-action:active {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .file-tab-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .file-tab-item.active {
+    background: rgba(255, 255, 255, 0.12);
+  }
+
+  .document-placeholder {
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  html[data-reduce-transparency='true'] .ai-shell {
+    background-color: var(--shell-fallback-dark);
+  }
+}
+

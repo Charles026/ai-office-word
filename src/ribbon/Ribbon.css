@@ -1,0 +1,248 @@
+/**
+ * Ribbon 样式 - 单行工具栏 (Toolbar) 风格
+ * 
+ * 参考 Notion / Modern Office
+ */
+
+/* ==========================================
+   Ribbon 容器
+   ========================================== */
+
+.ribbon {
+  display: flex;
+  flex-direction: column;
+  /* 保持与顶栏一致的深色背景 */
+  background: rgba(38, 38, 42, 0.98);
+  user-select: none;
+  flex-shrink: 0;
+  z-index: var(--z-ribbon, 100);
+  /* 底部边框 */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+}
+
+/* ==========================================
+   Tab 栏 (顶部)
+   ========================================== */
+
+.ribbon-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px;
+  padding-top: 6px;
+  height: 32px;
+  align-items: flex-end;
+  background: transparent;
+  /* Tab 栏和工具栏之间有一条细线，或者视觉上连通 */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ribbon-tab {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  background: transparent;
+  border: none;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  transition: all 100ms ease-out;
+  position: relative;
+  margin-bottom: -1px; /* 盖住底边框 */
+}
+
+.ribbon-tab:hover {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ribbon-tab.active {
+  color: #c4b5fd; /* 紫色高亮 */
+  background: rgba(255, 255, 255, 0.08);
+  border-bottom: 2px solid #a78bfa;
+}
+
+/* ==========================================
+   Ribbon Body (工具栏区域)
+   ========================================== */
+
+.ribbon-body {
+  /* 单行高度 */
+  height: 44px; 
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.ribbon-body::-webkit-scrollbar {
+  display: none;
+}
+
+.ribbon-toolbar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 4px;
+}
+
+/* ==========================================
+   分组与分隔符
+   ========================================== */
+
+.ribbon-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ribbon-separator {
+  width: 1px;
+  height: 20px;
+  background-color: rgba(255, 255, 255, 0.15);
+  margin: 0 8px;
+}
+
+/* ==========================================
+   按钮 (Button)
+   ========================================== */
+
+.ribbon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  transition: all 100ms ease-out;
+  height: 32px; /* 统一高度 */
+  padding: 0 6px;
+  font-family: inherit;
+}
+
+/* 仅图标 */
+.ribbon-button.variant-icon {
+  min-width: 32px;
+  padding: 0;
+}
+
+.ribbon-button.variant-icon .ribbon-button-icon {
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 仅文字 (样式选择器) */
+.ribbon-button.variant-label {
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 8px;
+  min-width: auto;
+}
+
+/* 图标 + 文字 */
+.ribbon-button.variant-icon-label {
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.ribbon-button.variant-icon-label .ribbon-button-icon {
+  font-size: 15px;
+}
+
+.ribbon-button.variant-icon-label .ribbon-button-label {
+  font-size: 12px;
+}
+
+/* 交互状态 */
+.ribbon-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.ribbon-button:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateY(1px);
+}
+
+.ribbon-button.active {
+  background: rgba(139, 92, 246, 0.25);
+  color: #c4b5fd;
+}
+
+.ribbon-button.active:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.35);
+}
+
+.ribbon-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ==========================================
+   特殊微调
+   ========================================== */
+
+/* Font group: make buttons slightly tighter if needed */
+.ribbon-group[data-group-id="font"] {
+  gap: 1px;
+}
+
+/* Styles group: distinct look */
+.ribbon-group[data-group-id="styles"] .ribbon-button {
+  /* font-family: serif;  Optional: reflect style */
+}
+
+/* Light Mode Override */
+@media (prefers-color-scheme: light) {
+  .ribbon {
+    background: #ffffff;
+    border-bottom-color: #e5e5e5;
+  }
+
+  .ribbon-tabs {
+    border-bottom-color: #e5e5e5;
+  }
+
+  .ribbon-tab {
+    color: #666;
+  }
+
+  .ribbon-tab:hover {
+    background: #f5f5f5;
+    color: #333;
+  }
+
+  .ribbon-tab.active {
+    background: #f0f0f0;
+    color: #7c3aed;
+    border-bottom-color: #7c3aed;
+  }
+
+  .ribbon-body {
+    background: #ffffff;
+  }
+
+  .ribbon-separator {
+    background-color: #e0e0e0;
+  }
+
+  .ribbon-button {
+    color: #444;
+  }
+
+  .ribbon-button:hover:not(:disabled) {
+    background: #f0f0f0;
+    color: #000;
+  }
+
+  .ribbon-button.active {
+    background: #f3e8ff;
+    color: #7c3aed;
+  }
+}
