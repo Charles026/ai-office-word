@@ -127,24 +127,29 @@ export async function callCopilotModel(
   // 获取编辑器引用
   const editor = getCopilotEditor();
 
+  // 判断是否应该使用 Envelope
+  const shouldUseEnvelope = 
+    (scope === 'section' && !!docId && !!sectionId && !!editor) ||
+    (scope === 'document' && !!docId && !!editor);
+
   if (__DEV__) {
     console.debug('[CopilotModelCaller] Envelope conditions:', {
       scope,
       docId: docId ?? '(null)',
       sectionId: sectionId ?? '(null)',
       hasEditor: !!editor,
-      willUseEnvelope: scope === 'section' && !!docId && !!sectionId && !!editor,
+      willUseEnvelope: shouldUseEnvelope,
     });
   }
 
-  // 尝试使用 DocContextEnvelope（scope=section 且有 editor）
-  if (scope === 'section' && docId && sectionId && editor) {
+  // 尝试使用 DocContextEnvelope（scope=section 或 scope=document）
+  if (shouldUseEnvelope && editor && docId) {
     try {
       const envelope = await buildDocContextEnvelope(
         {
           docId,
-          scope: 'section',
-          sectionId,
+          scope: scope as 'section' | 'document',
+          sectionId: scope === 'section' ? sectionId : undefined,
           maxTokens,
         },
         editor

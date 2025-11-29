@@ -278,6 +278,50 @@ console.log('Can undo:', engine.canUndo());
 console.log('Can redo:', engine.canRedo());
 ```
 
+### 3.4 Copilot 文档上下文 (DocContextEnvelope)
+
+Copilot 通过 `DocContextEnvelope` 获取文档的结构化快照，支持两种 scope：
+
+#### scope='section'（章节级）
+
+用于针对特定章节的 AI 操作（改写、总结等）。
+
+```typescript
+// 构建 section scope 的 envelope
+const envelope = await buildDocContextEnvelope({
+  docId: 'doc-123',
+  scope: 'section',
+  sectionId: 'heading-456',
+  maxTokens: 4096,
+}, editor);
+
+// envelope.focus.text 包含该章节的完整内容
+// envelope.global.outline 包含整个文档的大纲
+```
+
+#### scope='document'（文档级）
+
+用于整篇文档的问答和总结。LLM 可以"看到"整篇文档的结构化快照。
+
+```typescript
+// 构建 document scope 的 envelope
+const envelope = await buildDocContextEnvelope({
+  docId: 'doc-123',
+  scope: 'document',
+  maxTokens: 8192,
+}, editor);
+
+// envelope.global.sectionsPreview 包含每个章节的预览（标题 + 前 250 字）
+// envelope.global.totalCharCount 包含文档总字符数
+```
+
+**自动升级机制**：
+
+CopilotPanel 在聊天模式下会自动选择合适的 scope：
+- 如果用户聚焦在某个章节 → 使用 section scope
+- 如果有 docId 但没有选中章节 → 自动升级为 document scope
+- LLM 不会再说"我看不到文档内容"
+
 ---
 
 ## 4. 边界收紧状态 (2025-11 更新)

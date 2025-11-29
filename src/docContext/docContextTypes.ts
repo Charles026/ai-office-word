@@ -49,6 +49,24 @@ export interface NeighborSection {
   summary?: string;
 }
 
+/**
+ * 章节预览（用于 document scope）
+ * 
+ * 提供每个章节的简短预览，帮助 LLM 理解文档内容
+ */
+export interface SectionPreview {
+  /** 章节 ID */
+  sectionId: string;
+  /** 章节标题 */
+  title: string;
+  /** 层级（1=H1, 2=H2, 3=H3） */
+  level: number;
+  /** 章节内容片段（前 N 字符） */
+  snippet: string;
+  /** 章节总字符数 */
+  charCount: number;
+}
+
 // ==========================================
 // DocContextEnvelope（核心类型）
 // ==========================================
@@ -100,6 +118,12 @@ export interface GlobalContext {
   docSummary?: string;
   /** 完整大纲 */
   outline: OutlineEntry[];
+  /** 文档总字符数（scope=document 时填充） */
+  totalCharCount?: number;
+  /** 估算总 token 数（scope=document 时填充） */
+  approxTotalTokenCount?: number;
+  /** 各章节预览（scope=document 时填充） */
+  sectionsPreview?: SectionPreview[];
 }
 
 /**

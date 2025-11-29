@@ -167,6 +167,53 @@ function isHistoryCommand(commandId: string): boolean {
 }
 
 /**
+ * 边界违规检测结果
+ */
+interface BoundaryViolation {
+  flagName: string;
+  commandId: string;
+}
+
+/**
+ * 检测 feature flag 开启时是否意外进入 legacy 分支
+ * 
+ * 当 feature flag 开启时，对应的命令应该由 CommandBus 完全处理，
+ * 不应该进入 legacy 分支。如果进入了，说明边界收紧有漏洞。
+ * 
+ * @param commandId - 命令 ID
+ * @param flags - 当前 feature flags
+ * @returns 如果检测到违规，返回违规信息；否则返回 null
+ */
+function detectBoundaryViolation(
+  commandId: string,
+  flags: ReturnType<typeof getCommandFeatureFlags>
+): BoundaryViolation | null {
+  // 检查 format 命令
+  if (isInlineFormatCommand(commandId) && flags.useCommandBusForFormat) {
+    return { flagName: 'useCommandBusForFormat', commandId };
+  }
+  
+  // 检查 history 命令
+  if (isHistoryCommand(commandId) && flags.useCommandBusForHistory) {
+    return { flagName: 'useCommandBusForHistory', commandId };
+  }
+  
+  // 检查 block type 命令
+  const blockTypeCommands = ['setBlockTypeParagraph', 'setBlockTypeHeading1', 'setBlockTypeHeading2', 'setBlockTypeHeading3'];
+  if (blockTypeCommands.includes(commandId) && flags.useCommandBusForBlockType) {
+    return { flagName: 'useCommandBusForBlockType', commandId };
+  }
+  
+  // 检查 edit 命令
+  const editCommands = ['insertText', 'deleteRange', 'splitBlock', 'insertLineBreak'];
+  if (editCommands.includes(commandId) && flags.useCommandBusForEdit) {
+    return { flagName: 'useCommandBusForEdit', commandId };
+  }
+  
+  return null;
+}
+
+/**
  * 通过 CommandBus 执行命令
  * 
  * 【流程】
@@ -351,12 +398,28 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
   // ==========================================
   // 旧路径：直接操作 Lexical
   // 
-  // ⚠️ TODO(docops-boundary): 当对应的 feature flag 开启时，
+  // ⚠️ LEGACY ONLY: 当对应的 feature flag 开启时，
   // 这些旧路径应该永远不会被执行到。
-  // 如果你看到这些代码被执行，说明有 bug。
+  // 如果执行到了，说明边界收紧有漏洞！
   // ==========================================
+  
+  // 🚨 边界监控：检测 feature flag 开启时意外进入 legacy 分支
+  const flags = getCommandFeatureFlags();
+  const boundaryViolation = detectBoundaryViolation(commandId, flags);
+  if (boundaryViolation) {
+    console.error(
+      `[docops-boundary-legacy-hit] 🚨 BOUNDARY VIOLATION: ` +
+      `Command "${commandId}" entered legacy path while ${boundaryViolation.flagName}=true. ` +
+      `This should NEVER happen. Please report this bug.`
+    );
+    // 阻止执行 legacy 代码，避免悄悄绕过 DocOps
+    return;
+  }
+
   switch (commandId) {
-    // Editing
+    // ==========================================
+    // LEGACY ONLY: Editing
+    // ==========================================
     case 'insertText':
       // TODO(docops-boundary): 待迁移到 useCommandBusForEdit
       editor.update(() => {
@@ -367,29 +430,31 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
       });
       break;
 
-    // Text Formatting
-    // TODO(docops-boundary): 以下 format 命令在 useCommandBusForFormat=true 时不应执行
+    // ==========================================
+    // LEGACY ONLY: Text Formatting
+    // 仅当 useCommandBusForFormat=false 时执行
+    // ==========================================
     case 'toggleBold':
-      console.warn('[LexicalAdapter] LEGACY PATH: toggleBold via Lexical (should use CommandBus)');
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleBold via Lexical');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold');
       break;
     case 'toggleItalic':
-      console.warn('[LexicalAdapter] LEGACY PATH: toggleItalic via Lexical (should use CommandBus)');
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleItalic via Lexical');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic');
       break;
     case 'toggleUnderline':
-      console.warn('[LexicalAdapter] LEGACY PATH: toggleUnderline via Lexical (should use CommandBus)');
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleUnderline via Lexical');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline');
       break;
     case 'toggleStrikethrough':
-      console.warn('[LexicalAdapter] LEGACY PATH: toggleStrikethrough via Lexical (should use CommandBus)');
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleStrikethrough via Lexical');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough');
       break;
     case 'clearFormat':
+      // LEGACY ONLY: 目前 clearFormat 未实现 DocOps 路径
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
-          // 清除所有文本格式
           const formats: Array<'bold' | 'italic' | 'underline' | 'strikethrough'> = ['bold', 'italic', 'underline', 'strikethrough'];
           formats.forEach(format => {
             if (selection.hasFormat(format)) {
@@ -400,14 +465,16 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
       });
       break;
 
-    // History
-    // TODO(docops-boundary): 以下 history 命令在 useCommandBusForHistory=true 时不应执行
+    // ==========================================
+    // LEGACY ONLY: History
+    // 仅当 useCommandBusForHistory=false 时执行
+    // ==========================================
     case 'undo':
-      console.warn('[LexicalAdapter] LEGACY PATH: undo via Lexical UNDO_COMMAND (should use DocumentRuntime)');
+      console.warn('[LexicalAdapter] LEGACY PATH: undo via Lexical UNDO_COMMAND');
       editor.dispatchCommand(UNDO_COMMAND, undefined);
       break;
     case 'redo':
-      console.warn('[LexicalAdapter] LEGACY PATH: redo via Lexical REDO_COMMAND (should use DocumentRuntime)');
+      console.warn('[LexicalAdapter] LEGACY PATH: redo via Lexical REDO_COMMAND');
       editor.dispatchCommand(REDO_COMMAND, undefined);
       break;
 

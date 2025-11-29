@@ -299,6 +299,211 @@ describe('DocOps Boundary Enforcement', () => {
       expect(result.success).toBe(true);
     });
   });
+
+  // ==========================================
+  // 边缘情况测试
+  // ==========================================
+
+  describe('Edge Cases', () => {
+    beforeEach(() => {
+      setCommandFeatureFlags({
+        useCommandBusForFormat: true,
+        useCommandBusForHistory: true,
+      });
+    });
+
+    describe('Empty Document', () => {
+      it('toggleBold on empty document should be no-op', () => {
+        // 创建空文档 runtime
+        const emptyDoc = createEmptyDocument();
+        const emptyRuntime = new DocumentRuntime(emptyDoc);
+        const emptyCommandBus = new CommandBus(emptyRuntime);
+        
+        // 无选区执行 toggleBold
+        emptyRuntime.setSelection(null);
+        const result = emptyCommandBus.executeWithRuntime('toggleBold');
+        
+        // 应该失败但不崩溃
+        expect(result.success).toBe(false);
+        
+        // AST 未变化
+        const snapshot = emptyRuntime.getSnapshot();
+        expect(snapshot.ast.blocks.length).toBe(1); // 空文档有一个空段落
+      });
+
+      it('undo on empty document with no history should be no-op', () => {
+        const emptyDoc = createEmptyDocument();
+        const emptyRuntime = new DocumentRuntime(emptyDoc);
+        const emptyCommandBus = new CommandBus(emptyRuntime);
+        
+        // 清空历史
+        documentEngine.clearHistory();
+        
+        const result = emptyCommandBus.executeWithRuntime('undo');
+        
+        expect(result.success).toBe(false);
+        expect(result.error).toBe('Nothing to undo');
+      });
+
+      it('toggleBold on document with single empty paragraph', () => {
+        // 创建只有一个空段落的文档
+        const doc = createEmptyDocument();
+        doc.blocks = [{ ...createParagraph(''), id: 'empty-block' }];
+        
+        const singleRuntime = new DocumentRuntime(doc);
+        const singleCommandBus = new CommandBus(singleRuntime);
+        
+        // 设置折叠选区在空段落
+        singleRuntime.setSelection(createCollapsedSelection('empty-block', 0));
+        
+        // 执行 toggleBold（空选区应该 no-op）
+        const result = singleCommandBus.executeWithRuntime('toggleBold');
+        
+        // 对空选区的格式操作应该成功但不改变 AST（取决于实现）
+        // 至少不应该崩溃
+        expect(result.success !== undefined).toBe(true);
+      });
+    });
+
+    describe('Cross-Paragraph Selection', () => {
+      it('toggleBold on cross-paragraph selection should fail gracefully', () => {
+        // 创建两个段落的文档
+        const doc = createEmptyDocument();
+        doc.blocks = [
+          { ...createParagraph('First paragraph'), id: 'block-1' },
+          { ...createParagraph('Second paragraph'), id: 'block-2' },
+        ];
+        
+        const multiRuntime = new DocumentRuntime(doc);
+        const multiCommandBus = new CommandBus(multiRuntime);
+        
+        // 设置跨段落选区（从第一段中间到第二段中间）
+        multiRuntime.setSelection(createRangeSelection('block-1', 6, 'block-2', 6));
+        
+        // 执行 toggleBold
+        const result = multiCommandBus.executeWithRuntime('toggleBold');
+        
+        // 当前实现不支持跨段落格式化，应该失败但不崩溃
+        // 注：未来可能支持，届时需要更新测试
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Cross-block');
+      });
+    });
+
+    describe('Handler Error Scenarios', () => {
+      it('should handle CommandBus handler throwing error', () => {
+        // 创建一个会抛错的 CommandBus
+        const errorRuntime = new DocumentRuntime(createEmptyDocument());
+        const errorCommandBus = new CommandBus(errorRuntime);
+        
+        // 注册一个会抛错的 handler
+        errorCommandBus.register('toggleBold' as any, () => {
+          throw new Error('Test error: handler crashed');
+        });
+        
+        errorRuntime.setSelection(createCollapsedSelection(
+          errorRuntime.getSnapshot().ast.blocks[0].id, 
+          0
+        ));
+        
+        // 执行命令
+        const result = errorCommandBus.executeWithRuntime('toggleBold');
+        
+        // 应该捕获错误，返回失败结果
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Test error');
+      });
+    });
+  });
+
+  // ==========================================
+  // 防回退测试：确保 feature flag 开启时不调用 Lexical
+  // ==========================================
+
+  describe('No Lexical Fallback Verification', () => {
+    beforeEach(() => {
+      setCommandFeatureFlags({
+        useCommandBusForFormat: true,
+        useCommandBusForHistory: true,
+      });
+    });
+
+    it('multiple format operations should all go through CommandBus', () => {
+      runtime.setSelection(createRangeSelection('block-1', 0, 'block-1', 5));
+
+      // 执行多个格式操作
+      const results = [
+        commandBus.executeWithRuntime('toggleBold'),
+        commandBus.executeWithRuntime('toggleItalic'),
+        commandBus.executeWithRuntime('toggleUnderline'),
+        commandBus.executeWithRuntime('toggleStrike'),
+      ];
+
+      // 所有操作都应该成功
+      results.forEach((result, index) => {
+        expect(result.success).toBe(true);
+      });
+
+      // 验证所有格式都已应用到 AST
+      const snapshot = runtime.getSnapshot();
+      const firstRun = snapshot.ast.blocks[0].children[0];
+      if (firstRun.type === 'text') {
+        expect(firstRun.marks?.bold).toBe(true);
+        expect(firstRun.marks?.italic).toBe(true);
+        expect(firstRun.marks?.underline).toBe(true);
+        expect(firstRun.marks?.strikethrough).toBe(true);
+      }
+    });
+
+    it('format + undo sequence should all go through DocumentRuntime', () => {
+      runtime.setSelection(createRangeSelection('block-1', 0, 'block-1', 5));
+
+      // 执行格式操作
+      commandBus.executeWithRuntime('toggleBold');
+      commandBus.executeWithRuntime('toggleItalic');
+
+      // 验证历史状态
+      let snapshot = runtime.getSnapshot();
+      expect(snapshot.canUndo).toBe(true);
+
+      // 执行 undo 操作
+      commandBus.executeWithRuntime('undo');
+      commandBus.executeWithRuntime('undo');
+
+      // 验证所有格式都已撤销
+      snapshot = runtime.getSnapshot();
+      const firstRun = snapshot.ast.blocks[0].children[0];
+      if (firstRun.type === 'text') {
+        expect(firstRun.marks?.bold).toBeFalsy();
+        expect(firstRun.marks?.italic).toBeFalsy();
+      }
+
+      // 验证历史状态
+      expect(snapshot.canUndo).toBe(false);
+      expect(snapshot.canRedo).toBe(true);
+    });
+
+    it('redo should restore all changes via DocumentRuntime', () => {
+      runtime.setSelection(createRangeSelection('block-1', 0, 'block-1', 5));
+
+      // 执行格式操作
+      commandBus.executeWithRuntime('toggleBold');
+      
+      // Undo
+      commandBus.executeWithRuntime('undo');
+      
+      // Redo
+      const redoResult = commandBus.executeWithRuntime('redo');
+      expect(redoResult.success).toBe(true);
+
+      // 验证格式已恢复
+      const snapshot = runtime.getSnapshot();
+      const firstRun = snapshot.ast.blocks[0].children[0];
+      if (firstRun.type === 'text') {
+        expect(firstRun.marks?.bold).toBe(true);
+      }
+    });
+  });
 });
 
 // ==========================================

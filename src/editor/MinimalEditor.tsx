@@ -109,7 +109,27 @@ const StateReporterPlugin: React.FC<{ onStateChange?: (state: EditorStateReport)
     let canUndo = false;
     let canRedo = false;
 
-    // Register history listeners
+    // ==========================================
+    // 📖 只读监听：Lexical 内部历史状态
+    // ==========================================
+    // 
+    // ⚠️ 重要说明：
+    // 这里监听的是 Lexical 内部的 history 状态（CAN_UNDO_COMMAND/CAN_REDO_COMMAND），
+    // 仅用于 UI 状态展示（如工具栏按钮的 enabled/disabled）。
+    // 
+    // 🚫 禁止行为：
+    // UI 层的撤销/重做操作必须通过 CommandBus/DocumentRuntime 实现，
+    // 而不是直接 dispatch UNDO_COMMAND/REDO_COMMAND 到 Lexical。
+    // 
+    // 📌 正确做法：
+    // - 工具栏按钮 → executeEditorCommand(editor, 'undo') 
+    // - executeEditorCommand → CommandBus.executeWithRuntime('undo')
+    // - CommandBus → DocumentRuntime.undo()
+    // 
+    // TODO(docops-boundary): 当 useCommandBusForHistory=true 时，
+    // 应该从 DocumentRuntime.canUndo/canRedo 获取状态，而非 Lexical。
+    // 参见 EditorStateProvider 的实现。
+    // ==========================================
     const unregisterHistory = mergeRegister(
       editor.registerCommand(CAN_UNDO_COMMAND, (payload) => {
         canUndo = payload;

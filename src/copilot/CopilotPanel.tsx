@@ -117,11 +117,21 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
       const assistantMessage = createAssistantMessage('', true);
       appendMessage(docId, assistantMessage);
 
-      // 调用 LLM（通过统一入口，scope=section 时会使用 DocContextEnvelope）
+      // 🆕 智能选择 scope：
+      // - 如果有 sectionId，使用 section scope
+      // - 如果有 docId 但没有 sectionId，使用 document scope（让 LLM 能看到整篇文档）
+      // - 否则使用 none
+      let effectiveScope = context.scope;
+      if (docId && !context.sectionId && context.scope !== 'document') {
+        effectiveScope = 'document';
+        console.log('[CopilotPanel] Auto-upgrading scope to "document" (no sectionId)');
+      }
+
+      // 调用 LLM（通过统一入口）
       const allMessages = [...messages, userMessage];
       const response = await callCopilotModel({
         docId,
-        scope: context.scope,
+        scope: effectiveScope,
         sectionId: context.sectionId || undefined,
         userInput: content,
         context,
@@ -131,9 +141,14 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
       // DEV: 打印 envelope 信息
       if (process.env.NODE_ENV === 'development' && response.envelope) {
         console.log('[CopilotPanel] DocContextEnvelope used:', {
+          scope: response.envelope.scope,
+          title: response.envelope.global.title,
           sectionTitle: response.envelope.focus.sectionTitle,
-          charCount: response.envelope.focus.charCount,
+          charCount: response.envelope.scope === 'document' 
+            ? response.envelope.global.totalCharCount 
+            : response.envelope.focus.charCount,
           outlineCount: response.envelope.global.outline.length,
+          sectionsPreviewCount: response.envelope.global.sectionsPreview?.length || 0,
         });
       }
 
