@@ -7,7 +7,7 @@ export * from './copilotTypes';
 
 // Store
 export { copilotStore, useCopilotStore, useCopilotContext } from './copilotStore';
-export type { CopilotState } from './copilotStore';
+export type { CopilotState, PendingSectionResult } from './copilotStore';
 
 // 组件
 export { CopilotPanel } from './CopilotPanel';
@@ -38,6 +38,10 @@ export {
   setCopilotEditor,
   getCopilotEditor,
   setCopilotToast,
+  // v2 新增：Preview / Clarify 用户交互处理
+  applyPreviewResult,
+  cancelPreviewResult,
+  resolveClarification,
 } from './copilotRuntimeBridge';
 
 // Context Listener

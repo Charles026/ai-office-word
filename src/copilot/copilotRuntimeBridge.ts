@@ -33,7 +33,11 @@ import {
   SectionAiAction,
   SectionAiContext,
   SectionAiResult,
+  applyPendingDocOps,
+  triggerSectionAiWithClarification,
+  ClarificationChoice,
 } from '../actions/sectionAiActions';
+import type { PendingSectionResult } from './copilotStore';
 import { createSectionSnapshot } from './copilotSnapshots';
 import { extractSectionContext } from '../runtime/context';
 import { copilotDebugStore } from './copilotDebugStore';
@@ -203,6 +207,490 @@ function formatDocOpsForDebug(docOps?: SectionDocOp[]): string {
 function truncateText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength) + '...';
+}
+
+// ==========================================
+// v2 新增：responseMode 分支处理
+// ==========================================
+
+/**
+ * 根据 responseMode 处理 SectionAiResult
+ * 
+ * - auto_apply: 已应用，更新状态并显示成功消息
+ * - preview: 存储待处理结果，显示预览卡片
+ * - clarify: 存储待处理结果，显示澄清问题卡片
+ */
+async function handleSectionAiResult(
+  result: SectionAiResult,
+  resolved: ResolvedCommand,
+  docId: string,
+  actionMsg: CopilotMessage,
+  snapshotId: string | undefined,
+  editor: LexicalEditor,
+  sectionAction: SectionAiAction,
+  debugSnapshot: CopilotDebugSnapshot | null
+): Promise<void> {
+  const __DEV__ = process.env.NODE_ENV === 'development';
+
+  if (!result.success) {
+    // 失败处理
+    copilotStore.updateMessageMeta(docId, actionMsg.id, { 
+      status: 'failed',
+      error: result.error,
+    });
+
+    const failMsg = createAssistantMessage(
+      `执行失败：${result.error || '未知错误'}`
+    );
+    copilotStore.appendMessage(docId, failMsg);
+
+    if (__DEV__ && debugSnapshot) {
+      debugSnapshot.timings.finishedAt = Date.now();
+      debugSnapshot.timings.totalMs = debugSnapshot.timings.finishedAt - debugSnapshot.timings.startedAt;
+      debugSnapshot.error = result.error || '执行失败';
+      copilotDebugStore.setSnapshot(debugSnapshot);
+    }
+    return;
+  }
+
+  const responseMode = result.responseMode ?? 'auto_apply';
+
+  switch (responseMode) {
+    case 'auto_apply':
+      await handleAutoApply(result, resolved, docId, actionMsg, snapshotId, debugSnapshot);
+      break;
+      
+    case 'preview':
+      await handlePreview(result, resolved, docId, actionMsg, editor, sectionAction);
+      break;
+      
+    case 'clarify':
+      await handleClarify(result, resolved, docId, actionMsg, sectionAction);
+      break;
+  }
+}
+
+/**
+ * auto_apply 模式：已自动应用，显示成功消息
+ */
+async function handleAutoApply(
+  result: SectionAiResult,
+  resolved: ResolvedCommand,
+  docId: string,
+  actionMsg: CopilotMessage,
+  snapshotId: string | undefined,
+  debugSnapshot: CopilotDebugSnapshot | null
+): Promise<void> {
+  const __DEV__ = process.env.NODE_ENV === 'development';
+
+  copilotStore.updateMessageMeta(docId, actionMsg.id, { 
+    status: 'applied',
+    responseMode: 'auto_apply',
+    confidence: result.confidence,
+  });
+
+  // 记录到 lastActions
+  copilotStore.pushLastAction({
+    id: actionMsg.id,
+    type: resolved.command,
+    scope: resolved.scope,
+    docId,
+    sectionId: resolved.sectionId ?? undefined,
+    sectionTitle: resolved.sectionTitle ?? undefined,
+    createdAt: Date.now(),
+    undoSnapshotId: snapshotId,
+  });
+
+  // 记录 Interaction 事件
+  if (resolved.sectionId) {
+    if (resolved.command === 'rewrite_section_intro' || resolved.command === 'rewrite_section_chapter') {
+      logAiRewriteApplied(docId, resolved.sectionId, {
+        actionKind: resolved.command === 'rewrite_section_chapter' ? 'rewrite_chapter' : 'rewrite_intro',
+        sectionTitle: resolved.sectionTitle ?? undefined,
+      });
+    } else if (resolved.command === 'summarize_section') {
+      logAiSummaryApplied(docId, resolved.sectionId, {
+        sectionTitle: resolved.sectionTitle ?? undefined,
+      });
+    }
+  }
+
+  // 添加成功提示消息
+  const assistantSummary = result.assistantText?.trim();
+  const successMsg = createAssistantMessage(
+    `${assistantSummary || `已完成「${buildActionDescription(resolved)}」`}\n\n✅ 已自动应用到文档，可随时撤销。`
+  );
+  copilotStore.appendMessage(docId, successMsg);
+
+  // 记录调试快照
+  if (__DEV__ && debugSnapshot) {
+    debugSnapshot.timings.finishedAt = Date.now();
+    debugSnapshot.timings.totalMs = debugSnapshot.timings.finishedAt - debugSnapshot.timings.startedAt;
+    
+    const docOpsDetails = formatDocOpsForDebug(result.docOps);
+    debugSnapshot.responseMessages = [{
+      id: 'resp-0',
+      role: 'assistant',
+      content: docOpsDetails,
+      contentLength: docOpsDetails.length,
+    }];
+    copilotDebugStore.setSnapshot(debugSnapshot);
+  }
+}
+
+/**
+ * preview 模式：存储待处理结果，显示预览卡片
+ */
+async function handlePreview(
+  result: SectionAiResult,
+  resolved: ResolvedCommand,
+  docId: string,
+  actionMsg: CopilotMessage,
+  editor: LexicalEditor,
+  sectionAction: SectionAiAction
+): Promise<void> {
+  const pendingResultId = generateCopilotId('pending');
+  
+  // 获取预览文本（从 DocOps 中提取）
+  let previewText = '';
+  let originalText = '';
+  
+  if (result.docOps && result.docOps.length > 0) {
+    // 从 DocOps 中提取新文本
+    previewText = result.docOps
+      .filter(op => op.type === 'replace_paragraph' || op.type === 'insert_paragraph_after')
+      .map(op => (op as any).newText || '')
+      .join('\n\n');
+    
+    // 提取原始文本（如果 SectionContext 可用）
+    try {
+      const sectionContext = extractSectionContext(editor, resolved.sectionId!);
+      originalText = sectionContext.ownParagraphs.map(p => p.text).join('\n\n');
+    } catch (e) {
+      console.warn('[CopilotBridge] Failed to extract original text:', e);
+    }
+  }
+
+  // 存储待处理结果
+  const pendingResult: PendingSectionResult = {
+    id: pendingResultId,
+    sectionId: resolved.sectionId!,
+    responseMode: 'preview',
+    resultJson: JSON.stringify({
+      ...result,
+      // 附加执行上下文
+      _meta: {
+        command: resolved.command,
+        sectionAction,
+        docId,
+      }
+    }),
+    createdAt: Date.now(),
+    messageId: actionMsg.id,
+  };
+  copilotStore.addPendingResult(pendingResult);
+
+  // 更新 action 消息状态
+  copilotStore.updateMessageMeta(docId, actionMsg.id, { 
+    status: 'pending',
+    responseMode: 'preview',
+    previewText,
+    originalText,
+    pendingResultId,
+    confidence: result.confidence,
+  });
+
+  // 添加预览提示消息
+  const assistantSummary = result.assistantText?.trim();
+  const previewMsg = createAssistantMessage(
+    `${assistantSummary || '我已生成修改建议'}\n\n📝 请查看下方预览，确认后点击「应用到文档」。`
+  );
+  copilotStore.appendMessage(docId, previewMsg);
+}
+
+/**
+ * clarify 模式：存储待处理结果，显示澄清问题卡片
+ */
+async function handleClarify(
+  result: SectionAiResult,
+  resolved: ResolvedCommand,
+  docId: string,
+  actionMsg: CopilotMessage,
+  sectionAction: SectionAiAction
+): Promise<void> {
+  const pendingResultId = generateCopilotId('pending');
+  
+  // 从 uncertainties 中提取第一个不确定项
+  const mainUncertainty = result.uncertainties?.[0];
+  const clarifyQuestion = mainUncertainty?.reason ?? '有一个关键参数需要你来决定';
+  const clarifyOptions = mainUncertainty?.candidateOptions ?? [];
+  const clarifyField = mainUncertainty?.field ?? '';
+
+  // 存储待处理结果
+  const pendingResult: PendingSectionResult = {
+    id: pendingResultId,
+    sectionId: resolved.sectionId!,
+    responseMode: 'clarify',
+    resultJson: JSON.stringify({
+      ...result,
+      _meta: {
+        command: resolved.command,
+        sectionAction,
+        docId,
+      }
+    }),
+    createdAt: Date.now(),
+    messageId: actionMsg.id,
+  };
+  copilotStore.addPendingResult(pendingResult);
+
+  // 更新 action 消息状态
+  copilotStore.updateMessageMeta(docId, actionMsg.id, { 
+    status: 'pending',
+    responseMode: 'clarify',
+    clarifyQuestion,
+    clarifyOptions,
+    clarifyField,
+    pendingResultId,
+    confidence: result.confidence,
+  });
+
+  // 添加澄清提示消息
+  const assistantSummary = result.assistantText?.trim();
+  const clarifyMsg = createAssistantMessage(
+    `${assistantSummary || '我需要进一步确认你的意图'}\n\n❓ 请在下方选择一个选项，或输入你的具体要求。`
+  );
+  copilotStore.appendMessage(docId, clarifyMsg);
+}
+
+// ==========================================
+// v2 新增：Preview 和 Clarify 的用户交互处理
+// ==========================================
+
+/**
+ * 应用预览中的修改（用户点击「应用到文档」）
+ */
+export async function applyPreviewResult(pendingResultId: string): Promise<boolean> {
+  const pendingResult = copilotStore.getPendingResult(pendingResultId);
+  if (!pendingResult || pendingResult.responseMode !== 'preview') {
+    console.warn('[CopilotBridge] Invalid pending result for apply:', pendingResultId);
+    return false;
+  }
+
+  try {
+    const stored = JSON.parse(pendingResult.resultJson) as SectionAiResult & {
+      _meta: { docId: string; command: string };
+    };
+    const editor = getCopilotEditor();
+    if (!editor) {
+      console.error('[CopilotBridge] No editor available');
+      return false;
+    }
+
+    // 应用 DocOps
+    const success = await applyPendingDocOps(editor, stored);
+    
+    if (success) {
+      const docId = stored._meta.docId;
+      
+      // 更新消息状态
+      if (pendingResult.messageId) {
+        copilotStore.updateMessageMeta(docId, pendingResult.messageId, {
+          status: 'applied',
+        });
+      }
+
+      // 记录 Interaction 事件
+      if (stored.intent?.scope.sectionId) {
+        const sectionId = stored.intent.scope.sectionId;
+        const tasks = stored.intent.tasks;
+        
+        if (tasks.some(t => t.type === 'rewrite')) {
+          logAiRewriteApplied(docId, sectionId, {
+            actionKind: 'rewrite_intro',
+          });
+        } else if (tasks.some(t => t.type === 'summarize')) {
+          logAiSummaryApplied(docId, sectionId);
+        }
+      }
+
+      // 添加成功消息
+      const successMsg = createAssistantMessage('✅ 已应用修改到文档，可随时撤销。');
+      copilotStore.appendMessage(docId, successMsg);
+
+      // 清理待处理结果
+      copilotStore.removePendingResult(pendingResultId);
+      
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    console.error('[CopilotBridge] Failed to apply preview:', error);
+    return false;
+  }
+}
+
+/**
+ * 取消预览（用户点击「暂不应用」）
+ */
+export function cancelPreviewResult(pendingResultId: string): void {
+  const pendingResult = copilotStore.getPendingResult(pendingResultId);
+  if (!pendingResult) return;
+
+  try {
+    const stored = JSON.parse(pendingResult.resultJson) as { _meta: { docId: string } };
+    const docId = stored._meta.docId;
+
+    // 更新消息状态
+    if (pendingResult.messageId) {
+      copilotStore.updateMessageMeta(docId, pendingResult.messageId, {
+        status: 'reverted',
+      });
+    }
+
+    // 添加取消消息
+    const cancelMsg = createAssistantMessage('已取消本次修改。');
+    copilotStore.appendMessage(docId, cancelMsg);
+
+    // 清理待处理结果
+    copilotStore.removePendingResult(pendingResultId);
+  } catch (error) {
+    console.error('[CopilotBridge] Failed to cancel preview:', error);
+  }
+}
+
+/**
+ * 解决澄清问题（用户选择了某个选项）
+ */
+export async function resolveClarification(
+  pendingResultId: string,
+  userChoice: string
+): Promise<void> {
+  const pendingResult = copilotStore.getPendingResult(pendingResultId);
+  if (!pendingResult || pendingResult.responseMode !== 'clarify') {
+    console.warn('[CopilotBridge] Invalid pending result for clarify:', pendingResultId);
+    return;
+  }
+
+  try {
+    const stored = JSON.parse(pendingResult.resultJson) as SectionAiResult & {
+      _meta: { docId: string; command: CopilotCommand; sectionAction: SectionAiAction };
+    };
+    const editor = getCopilotEditor();
+    if (!editor) {
+      console.error('[CopilotBridge] No editor available');
+      return;
+    }
+
+    const docId = stored._meta.docId;
+    const sectionAction = stored._meta.sectionAction;
+    const sectionId = pendingResult.sectionId;
+
+    // 更新消息状态
+    if (pendingResult.messageId) {
+      copilotStore.updateMessageMeta(docId, pendingResult.messageId, {
+        status: 'applied', // 标记为已处理（不是真正应用，只是表示用户已响应）
+      });
+    }
+
+    // 清理旧的待处理结果
+    copilotStore.removePendingResult(pendingResultId);
+
+    // 添加用户选择的消息
+    const userMsg: CopilotMessage = {
+      id: generateCopilotId('msg'),
+      role: 'user',
+      content: userChoice,
+      createdAt: Date.now(),
+      meta: { docId, sectionId },
+    };
+    copilotStore.appendMessage(docId, userMsg);
+
+    // 构建澄清选择
+    const mainUncertainty = stored.uncertainties?.[0];
+    if (!mainUncertainty || !stored.intent) {
+      console.error('[CopilotBridge] Missing uncertainty or intent for clarification');
+      return;
+    }
+
+    const clarification: ClarificationChoice = {
+      originalIntent: stored.intent,
+      uncertainty: mainUncertainty,
+      userChoice,
+    };
+
+    // 重新调用 Section AI（带澄清）
+    const context: SectionAiContext = {
+      editor,
+      toast: getToastCallbacks(),
+    };
+
+    // 创建新的 action 消息
+    const newActionMsg: CopilotMessage = {
+      id: generateCopilotId('action'),
+      role: 'action',
+      content: `正在根据你的选择「${userChoice}」重新处理...`,
+      createdAt: Date.now(),
+      meta: {
+        docId,
+        scope: 'section',
+        sectionId,
+        actionType: stored._meta.command,
+        status: 'pending',
+      },
+    };
+    copilotStore.appendMessage(docId, newActionMsg);
+
+    // 调用带澄清的 Section AI
+    const newResult = await triggerSectionAiWithClarification(
+      sectionAction,
+      sectionId,
+      context,
+      clarification
+    );
+
+    // 处理新结果（递归调用 handleSectionAiResult 的逻辑）
+    if (newResult.success) {
+      const newResponseMode = newResult.responseMode ?? 'auto_apply';
+      
+      if (newResponseMode === 'auto_apply' && newResult.applied) {
+        copilotStore.updateMessageMeta(docId, newActionMsg.id, { status: 'applied' });
+        const successMsg = createAssistantMessage(
+          `${newResult.assistantText || '已完成修改'}\n\n✅ 已自动应用到文档。`
+        );
+        copilotStore.appendMessage(docId, successMsg);
+      } else if (newResponseMode === 'preview') {
+        // 仍然是 preview 模式
+        await handlePreview(
+          newResult,
+          { command: stored._meta.command, docId, sectionId, scope: 'section' } as ResolvedCommand,
+          docId,
+          newActionMsg,
+          editor,
+          sectionAction
+        );
+      } else if (newResponseMode === 'clarify') {
+        // 仍然需要澄清（不太可能，但处理以防万一）
+        await handleClarify(
+          newResult,
+          { command: stored._meta.command, docId, sectionId, scope: 'section' } as ResolvedCommand,
+          docId,
+          newActionMsg,
+          sectionAction
+        );
+      }
+    } else {
+      copilotStore.updateMessageMeta(docId, newActionMsg.id, { 
+        status: 'failed',
+        error: newResult.error,
+      });
+      const failMsg = createAssistantMessage(`执行失败：${newResult.error || '未知错误'}`);
+      copilotStore.appendMessage(docId, failMsg);
+    }
+  } catch (error) {
+    console.error('[CopilotBridge] Failed to resolve clarification:', error);
+  }
 }
 
 // ==========================================
@@ -521,78 +1009,17 @@ export async function runCopilotCommand(
       }
     );
 
-    // 9. 更新 action 消息状态
-    if (result.success) {
-      copilotStore.updateMessageMeta(docId, actionMsg.id, { status: 'applied' });
-
-      // 记录到 lastActions
-      copilotStore.pushLastAction({
-        id: actionMsg.id,
-        type: resolved.command,
-        scope: resolved.scope,
+    // 🆕 9. 根据 responseMode 分支处理结果
+    await handleSectionAiResult(
+      result,
+      resolved,
         docId,
-        sectionId: resolved.sectionId ?? undefined,
-        sectionTitle: resolved.sectionTitle ?? undefined,
-        createdAt: Date.now(),
-        undoSnapshotId: snapshotId,
-      });
-
-      // 🆕 记录 Interaction 事件
-      if (resolved.sectionId) {
-        if (resolved.command === 'rewrite_section_intro' || resolved.command === 'rewrite_section_chapter') {
-          logAiRewriteApplied(docId, resolved.sectionId, {
-            actionKind: resolved.command === 'rewrite_section_chapter' ? 'rewrite_chapter' : 'rewrite_intro',
-            sectionTitle: resolved.sectionTitle ?? undefined,
-          });
-        } else if (resolved.command === 'summarize_section') {
-          logAiSummaryApplied(docId, resolved.sectionId, {
-            sectionTitle: resolved.sectionTitle ?? undefined,
-          });
-        }
-      }
-
-      // 添加成功提示消息
-      const assistantSummary = result.assistantText?.trim();
-      const successMsg = createAssistantMessage(
-        `${assistantSummary || `已完成「${buildActionDescription(resolved)}」`}\n\n你可以在文档中查看效果。`
-      );
-      copilotStore.appendMessage(docId, successMsg);
-
-      // 记录调试快照
-      if (__DEV__ && debugSnapshot) {
-        debugSnapshot.timings.finishedAt = Date.now();
-        debugSnapshot.timings.totalMs = debugSnapshot.timings.finishedAt - debugSnapshot.timings.startedAt;
-        
-        // 构建详细的 DocOps 执行摘要
-        const docOpsDetails = formatDocOpsForDebug(result.docOps);
-        debugSnapshot.responseMessages = [{
-          id: 'resp-0',
-          role: 'assistant',
-          content: docOpsDetails,
-          contentLength: docOpsDetails.length,
-        }];
-        copilotDebugStore.setSnapshot(debugSnapshot);
-      }
-    } else {
-      copilotStore.updateMessageMeta(docId, actionMsg.id, { 
-        status: 'failed',
-        error: result.error,
-      });
-
-      // 添加失败提示消息
-      const failMsg = createAssistantMessage(
-        `执行失败：${result.error || '未知错误'}`
-      );
-      copilotStore.appendMessage(docId, failMsg);
-
-      // 记录调试快照
-      if (__DEV__ && debugSnapshot) {
-        debugSnapshot.timings.finishedAt = Date.now();
-        debugSnapshot.timings.totalMs = debugSnapshot.timings.finishedAt - debugSnapshot.timings.startedAt;
-        debugSnapshot.error = result.error || '执行失败';
-        copilotDebugStore.setSnapshot(debugSnapshot);
-      }
-    }
+      actionMsg,
+      snapshotId,
+      editor,
+      sectionAction,
+      debugSnapshot
+    );
   } catch (error) {
     console.error('[CopilotBridge] runCopilotCommand error:', error);
 

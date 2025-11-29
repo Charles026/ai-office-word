@@ -35,6 +35,7 @@ import { CopilotEventPlugin } from './plugins/CopilotEventPlugin';
 import { ParagraphStyle, getStyleFromBlockType } from './styles/paragraphStyles';
 import { FontOptionKey, matchFontFamily } from '../config/fonts';
 import { FontSizeKey, matchFontSize, LineHeightKey, TextAlignKey } from '../config/typography';
+import { getEditorStateProvider } from '../core/commands/EditorStateProvider';
 
 // ==========================================
 // Types
@@ -256,7 +257,7 @@ const StateReporterPlugin: React.FC<{ onStateChange?: (state: EditorStateReport)
           }
         }
 
-        onStateChange({
+        const stateReport = {
           activeFormats,
           canUndo,
           canRedo,
@@ -273,7 +274,16 @@ const StateReporterPlugin: React.FC<{ onStateChange?: (state: EditorStateReport)
           currentTextAlign,
           currentLineHeight,
           isMixedLineHeight,
-        });
+        };
+
+        // 🆕 同步到 EditorStateProvider（用于 DocumentRuntime 集成）
+        try {
+          getEditorStateProvider().updateLexicalState(stateReport);
+        } catch (e) {
+          // 静默处理，避免影响主流程
+        }
+
+        onStateChange(stateReport);
       });
     };
 

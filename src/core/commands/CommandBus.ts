@@ -10,6 +10,14 @@
  * - 所有编辑操作都通过此总线执行
  * - 命令只操作 AST 和 SelectionState
  * - 不直接操作 DOM
+ * 
+ * 【v1 重构】(2025-11)
+ * - 新增 DocumentRuntime 集成
+ * - 命令执行流程：
+ *   1. 从 runtime.getSnapshot() 获取当前 AST + selection
+ *   2. 命令 handler 生成 DocOps
+ *   3. runtime.applyDocOps(docOps) 更新 AST
+ *   4. 返回结果供 UI 同步
  */
 
 import {
@@ -26,6 +34,7 @@ import {
 import { findBlockById, hasInlineChildren } from '../../document/types';
 import { DocSelection, isCollapsedSelection, normalizeSelection } from '../../document/selection';
 import { documentEngine } from '../../document/DocumentEngine';
+import { DocumentRuntime, documentRuntime as defaultRuntime } from '../../document/DocumentRuntime';
 import { createOpMeta, DocOp } from '../../docops/types';
 
 // ==========================================
@@ -34,9 +43,27 @@ import { createOpMeta, DocOp } from '../../docops/types';
 
 export class CommandBus {
   private registry: CommandRegistry = {};
+  private runtime: DocumentRuntime;
 
-  constructor() {
+  constructor(runtime?: DocumentRuntime) {
+    this.runtime = runtime ?? defaultRuntime;
     this.registerDefaultHandlers();
+  }
+
+  /**
+   * 设置 DocumentRuntime
+   * 
+   * 用于切换文档时更换 runtime 实例
+   */
+  setRuntime(runtime: DocumentRuntime): void {
+    this.runtime = runtime;
+  }
+
+  /**
+   * 获取当前 DocumentRuntime
+   */
+  getRuntime(): DocumentRuntime {
+    return this.runtime;
   }
 
   /**
@@ -47,7 +74,9 @@ export class CommandBus {
   }
 
   /**
-   * 执行命令
+   * 执行命令（传入上下文版本）
+   * 
+   * 用于需要精确控制上下文的场景
    */
   execute<T extends CommandId>(
     commandId: T,
@@ -77,6 +106,70 @@ export class CommandBus {
         error: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  }
+
+  /**
+   * 执行命令（使用 DocumentRuntime）
+   * 
+   * 这是推荐的新入口：
+   * 1. 从 runtime.getSnapshot() 获取当前状态
+   * 2. 执行命令
+   * 3. 如果成功，更新 runtime 状态
+   * 
+   * @param commandId - 命令 ID
+   * @param payload - 命令参数
+   * @returns 执行结果
+   */
+  executeWithRuntime<T extends CommandId>(
+    commandId: T,
+    payload?: CommandPayloadMap[T]
+  ): CommandResult {
+    const snapshot = this.runtime.getSnapshot();
+    const context: CommandContext = {
+      ast: snapshot.ast,
+      selection: snapshot.selection,
+    };
+
+    // 特殊处理 undo/redo（直接调用 runtime）
+    if (commandId === 'undo') {
+      const success = this.runtime.undo();
+      const newSnapshot = this.runtime.getSnapshot();
+      return {
+        success,
+        nextAst: newSnapshot.ast,
+        nextSelection: newSnapshot.selection,
+        error: success ? undefined : 'Nothing to undo',
+      };
+    }
+
+    if (commandId === 'redo') {
+      const success = this.runtime.redo();
+      const newSnapshot = this.runtime.getSnapshot();
+      return {
+        success,
+        nextAst: newSnapshot.ast,
+        nextSelection: newSnapshot.selection,
+        error: success ? undefined : 'Nothing to redo',
+      };
+    }
+
+    // 执行命令
+    const result = this.execute(commandId, context, payload);
+
+    // 如果成功且 AST 有变化，同步到 runtime
+    if (result.success && result.nextAst !== context.ast) {
+      // 更新 runtime 的 AST
+      // 注意：历史已经由 documentEngine.applyOps 内部记录了
+      // 这里只需要更新 runtime 的 AST 引用
+      this.runtime._setAstWithoutHistory(result.nextAst);
+    }
+
+    // 更新选区
+    if (result.nextSelection) {
+      this.runtime.setSelection(result.nextSelection);
+    }
+
+    return result;
   }
 
   /**

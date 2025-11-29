@@ -4,10 +4,38 @@
  * Maps abstract editor commands (string IDs) to Lexical specific actions.
  * This serves as the "Command Layer" requested.
  * 
+ * ==========================================================================
+ * 🔴 ARCHITECTURE NOTE (2025-11)
+ * ==========================================================================
+ * 
+ * 【当前现状】
+ * 目前真实主干是：LexicalAdapter → Lexical（直接操作）
+ * 而 DocOps / DocumentEngine 尚未接入 UI 主干。
+ * 
+ * 调用链路：
+ *   EditorContainer / Ribbon
+ *     → executeEditorCommand(editor, commandId, payload)
+ *     → 直接调用 editor.dispatchCommand / editor.update
+ *     → Lexical 内部状态变更
+ * 
+ * 【目标架构】
+ * UI / Lexical 事件
+ *   → CommandBus.execute(commandId, payload)
+ *   → 命令层只负责：解析 selection/context、组装 DocOps 列表
+ *   → DocumentEngine.applyDocOps(docOps[])
+ *   → 返回新的 DocumentAst + selection
+ *   → 映射回 Lexical 编辑器渲染
+ * 
+ * 【迁移计划】
+ * v1: 基础文本/heading/undo/redo 切换到 CommandBus → DocOps → DocumentEngine
+ * v2: 列表、复杂块类型、IME、粘贴等
+ * 
  * TODO(docops-boundary):
  * - This entire file represents a boundary violation in the "DocOps Runtime" architecture.
  * - It manipulates Lexical state directly, bypassing CommandBus -> DocOps -> DocumentEngine.
  * - Future Goal: UI calls CommandBus -> DocumentEngine updates AST -> Adapter syncs AST to Lexical.
+ * 
+ * ==========================================================================
  * 
  * 【命令分类】
  * - 文本格式：toggleBold, toggleItalic, toggleUnderline
@@ -33,6 +61,12 @@ import {
   $isListItemNode,
   ListItemNode,
 } from '@lexical/list';
+
+// 新路径依赖
+import { shouldUseCommandBus } from './featureFlags';
+import { commandBus } from './CommandBus';
+import { reconcileAstToLexical } from './LexicalReconciler';
+import { lexicalSelectionToDocSelection, syncLexicalToRuntime } from './LexicalBridge';
 
 // ==========================================
 // 命令 ID 类型
@@ -114,7 +148,138 @@ function $isAllListType(listType: 'bullet' | 'number'): boolean {
   });
 }
 
+// ==========================================
+// CommandBus 新路径执行
+// ==========================================
+
+/**
+ * 通过 CommandBus 执行命令
+ * 
+ * 【流程】
+ * 1. 从 Lexical 同步当前状态到 DocumentRuntime（undo/redo 除外）
+ * 2. 通过 CommandBus 执行命令
+ * 3. 将结果同步回 Lexical
+ * 
+ * @param editor - Lexical 编辑器实例
+ * @param commandId - 命令 ID
+ * @param payload - 命令参数
+ * @returns 是否执行成功
+ */
+function executeCommandViaCommandBus(
+  editor: LexicalEditor,
+  commandId: string,
+  payload?: any
+): boolean {
+  try {
+    const runtime = commandBus.getRuntime();
+    const isHistoryCommand = commandId === 'undo' || commandId === 'redo';
+    
+    // undo/redo 不同步状态（会清空历史栈），直接使用 runtime 当前状态
+    // 其他命令需要先同步 Lexical 状态到 runtime
+    if (!isHistoryCommand) {
+      syncLexicalToRuntime(editor, runtime);
+    }
+    
+    // 映射 LexicalAdapter 命令 ID 到 CommandBus 命令 ID
+    const busCommandId = mapToBusCommandId(commandId);
+    if (!busCommandId) {
+      console.warn(`[LexicalAdapter] No CommandBus mapping for: ${commandId}`);
+      return false;
+    }
+
+    // 转换 payload
+    const busPayload = mapPayload(commandId, payload);
+
+    // 检查 undo/redo 是否有历史可操作
+    if (isHistoryCommand) {
+      const snapshot = runtime.getSnapshot();
+      if (commandId === 'undo' && !snapshot.canUndo) {
+        console.log(`[LexicalAdapter] No history to undo, falling back to Lexical`);
+        return false; // 回退到 Lexical 的 undo
+      }
+      if (commandId === 'redo' && !snapshot.canRedo) {
+        console.log(`[LexicalAdapter] No history to redo, falling back to Lexical`);
+        return false; // 回退到 Lexical 的 redo
+      }
+    }
+
+    // 执行命令
+    const result = commandBus.executeWithRuntime(busCommandId as any, busPayload);
+
+    if (result.success) {
+      // 将结果同步回 Lexical
+      reconcileAstToLexical(editor, result.nextAst, {
+        selection: result.nextSelection,
+      });
+      
+      console.log(`[LexicalAdapter] CommandBus path succeeded for: ${commandId}`);
+      return true;
+    }
+
+    console.warn(`[LexicalAdapter] CommandBus execution failed:`, result.error);
+    return false;
+  } catch (error) {
+    console.error(`[LexicalAdapter] CommandBus path error:`, error);
+    return false;
+  }
+}
+
+/**
+ * 映射 LexicalAdapter 命令 ID 到 CommandBus 命令 ID
+ */
+function mapToBusCommandId(lexicalCommandId: string): string | null {
+  const mapping: Record<string, string> = {
+    // 文本格式
+    'toggleBold': 'toggleBold',
+    'toggleItalic': 'toggleItalic',
+    'toggleUnderline': 'toggleUnderline',
+    'toggleStrikethrough': 'toggleStrike', // 注意命名差异
+    
+    // 块级格式
+    'setBlockTypeParagraph': 'setBlockTypeParagraph',
+    'setBlockTypeHeading1': 'setBlockTypeHeading1',
+    'setBlockTypeHeading2': 'setBlockTypeHeading2',
+    'setBlockTypeHeading3': 'setBlockTypeHeading3',
+    
+    // 历史
+    'undo': 'undo',
+    'redo': 'redo',
+    
+    // 编辑
+    'insertText': 'insertText',
+  };
+
+  return mapping[lexicalCommandId] ?? null;
+}
+
+/**
+ * 转换 payload 格式
+ */
+function mapPayload(commandId: string, payload: any): any {
+  switch (commandId) {
+    case 'insertText':
+      return { text: payload };
+    default:
+      return payload;
+  }
+}
+
 export const executeEditorCommand = (editor: LexicalEditor, commandId: string, payload?: any) => {
+  // ==========================================
+  // 🆕 Feature Flag: 使用 CommandBus 新路径
+  // ==========================================
+  if (shouldUseCommandBus(commandId)) {
+    const success = executeCommandViaCommandBus(editor, commandId, payload);
+    if (success) {
+      return; // 新路径执行成功，直接返回
+    }
+    // 新路径失败，fallback 到旧路径
+    console.warn(`[LexicalAdapter] CommandBus path failed for "${commandId}", falling back to legacy path`);
+  }
+
+  // ==========================================
+  // 旧路径：直接操作 Lexical
+  // ==========================================
   switch (commandId) {
     // Editing
     case 'insertText':

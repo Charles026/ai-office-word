@@ -24,11 +24,31 @@ import {
 // 状态类型
 // ==========================================
 
+/**
+ * 待处理的 Section AI 结果（用于 preview / clarify 模式）
+ */
+export interface PendingSectionResult {
+  /** 唯一 ID */
+  id: string;
+  /** Section ID */
+  sectionId: string;
+  /** 响应模式 */
+  responseMode: 'preview' | 'clarify';
+  /** 完整的 SectionAiResult（JSON 序列化后存储） */
+  resultJson: string;
+  /** 创建时间 */
+  createdAt: number;
+  /** 关联的消息 ID */
+  messageId?: string;
+}
+
 export interface CopilotState {
   /** 会话：按 docId 存储 */
   sessions: Record<string, CopilotSession>;
   /** 当前上下文 */
   context: CopilotContext;
+  /** 待处理的 Section AI 结果（key = pendingResultId） */
+  pendingResults: Record<string, PendingSectionResult>;
 }
 
 // ==========================================
@@ -48,6 +68,7 @@ function createInitialState(): CopilotState {
   return {
     sessions: {},
     context: createDefaultContext(),
+    pendingResults: {},
   };
 }
 
@@ -358,6 +379,72 @@ class CopilotStore {
   }
 
   // ==========================================
+  // Actions: 待处理结果管理 (preview / clarify)
+  // ==========================================
+
+  /**
+   * 添加待处理的 Section AI 结果
+   */
+  addPendingResult(result: PendingSectionResult): void {
+    this.log('addPendingResult', { id: result.id, responseMode: result.responseMode });
+
+    this.state = {
+      ...this.state,
+      pendingResults: {
+        ...this.state.pendingResults,
+        [result.id]: result,
+      },
+    };
+
+    this.notify();
+  }
+
+  /**
+   * 获取待处理结果
+   */
+  getPendingResult(id: string): PendingSectionResult | null {
+    return this.state.pendingResults[id] || null;
+  }
+
+  /**
+   * 移除待处理结果
+   */
+  removePendingResult(id: string): void {
+    this.log('removePendingResult', { id });
+
+    const newPendingResults = { ...this.state.pendingResults };
+    delete newPendingResults[id];
+
+    this.state = {
+      ...this.state,
+      pendingResults: newPendingResults,
+    };
+
+    this.notify();
+  }
+
+  /**
+   * 清理指定 section 的所有待处理结果
+   */
+  clearPendingResultsForSection(sectionId: string): void {
+    this.log('clearPendingResultsForSection', { sectionId });
+
+    const newPendingResults = { ...this.state.pendingResults };
+    for (const [id, result] of Object.entries(newPendingResults)) {
+      if (result.sectionId === sectionId) {
+        delete newPendingResults[id];
+      }
+    }
+
+    this.state = {
+      ...this.state,
+      pendingResults: newPendingResults,
+    };
+
+    this.notify();
+  }
+
+  // ==========================================
   // 重置
   // ==========================================
 
@@ -395,6 +482,7 @@ export function useCopilotStore() {
     state,
     context: state.context,
     sessions: state.sessions,
+    pendingResults: state.pendingResults,
 
     // Actions
     setActiveDoc: (docId: string | null) => copilotStore.setActiveDoc(docId),
@@ -409,6 +497,12 @@ export function useCopilotStore() {
     clearSession: (docId: string | null) => copilotStore.clearSession(docId),
     updateContext: (partial: Partial<CopilotContext>) => copilotStore.updateContext(partial),
     pushLastAction: (action: CopilotActionMeta) => copilotStore.pushLastAction(action),
+    
+    // v2 新增：待处理结果管理
+    addPendingResult: (result: PendingSectionResult) => copilotStore.addPendingResult(result),
+    getPendingResult: (id: string) => copilotStore.getPendingResult(id),
+    removePendingResult: (id: string) => copilotStore.removePendingResult(id),
+    clearPendingResultsForSection: (sectionId: string) => copilotStore.clearPendingResultsForSection(sectionId),
 
     // 辅助方法
     getActiveSession: () => copilotStore.getActiveSession(),

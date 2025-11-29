@@ -370,6 +370,232 @@
   color: #9ca3af;
 }
 
+/* ==========================================
+   v2 新增：Preview 预览卡片
+   ========================================== */
+
+.copilot-message-preview-card {
+  width: 100%;
+  max-width: 320px;
+  padding: 14px 16px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.copilot-message-preview-card:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.copilot-message-preview-card .copilot-message-action-header {
+  color: #60a5fa;
+}
+
+.copilot-message-preview-card .copilot-message-action-header svg {
+  color: #60a5fa;
+}
+
+.copilot-message-preview-card .action-type {
+  color: #60a5fa;
+}
+
+.copilot-preview-content {
+  margin: 12px 0;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.copilot-preview-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d1d5db;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.copilot-preview-empty {
+  font-size: 13px;
+  color: #6b7280;
+  font-style: italic;
+  text-align: center;
+  padding: 16px;
+}
+
+.copilot-confidence {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #6b7280;
+  margin-bottom: 12px;
+}
+
+.confidence-label {
+  color: #6b7280;
+}
+
+.confidence-value {
+  color: #60a5fa;
+  font-weight: 500;
+}
+
+.copilot-preview-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.copilot-preview-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copilot-preview-btn-primary {
+  background: linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.copilot-preview-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.copilot-preview-btn-secondary {
+  background: rgba(255, 255, 255, 0.06);
+  color: #9ca3af;
+}
+
+.copilot-preview-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+/* ==========================================
+   v2 新增：Clarify 澄清卡片
+   ========================================== */
+
+.copilot-message-clarify-card {
+  width: 100%;
+  max-width: 320px;
+  padding: 14px 16px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  border-radius: 12px;
+  transition: all 0.15s ease;
+}
+
+.copilot-message-clarify-card:hover {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.copilot-message-clarify-card .copilot-message-action-header {
+  color: #fbbf24;
+}
+
+.copilot-message-clarify-card .copilot-message-action-header svg {
+  color: #fbbf24;
+}
+
+.copilot-message-clarify-card .action-type {
+  color: #fbbf24;
+}
+
+.copilot-clarify-question {
+  margin: 12px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #e5e7eb;
+}
+
+.copilot-clarify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.copilot-clarify-option-btn {
+  padding: 8px 14px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 20px;
+  font-size: 13px;
+  color: #fbbf24;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copilot-clarify-option-btn:hover {
+  background: rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.5);
+  transform: translateY(-1px);
+}
+
+.copilot-clarify-custom {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.copilot-clarify-input {
+  flex: 1;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #e5e7eb;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.copilot-clarify-input:focus {
+  border-color: rgba(245, 158, 11, 0.4);
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.1);
+}
+
+.copilot-clarify-input::placeholder {
+  color: #6b7280;
+}
+
+.copilot-clarify-submit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 8px;
+  color: #fbbf24;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copilot-clarify-submit-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.25);
+}
+
+.copilot-clarify-submit-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* 撤销按钮 */
 .copilot-undo-btn {
   display: inline-flex;

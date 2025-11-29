@@ -85,6 +85,53 @@ export interface CopilotMessageMeta {
   undoable?: boolean;
   /** 撤销快照 ID */
   undoSnapshotId?: string;
+  
+  // ==========================================
+  // v2 新增：responseMode 相关字段
+  // ==========================================
+  
+  /**
+   * Copilot 响应模式（来自 CanonicalIntent）
+   * - auto_apply: 已自动应用
+   * - preview: 预览中，等待用户确认
+   * - clarify: 澄清中，等待用户选择
+   */
+  responseMode?: 'auto_apply' | 'preview' | 'clarify';
+  
+  /**
+   * Preview 模式：预览内容（新版本文本）
+   */
+  previewText?: string;
+  
+  /**
+   * Preview 模式：原始内容
+   */
+  originalText?: string;
+  
+  /**
+   * Clarify 模式：澄清问题
+   */
+  clarifyQuestion?: string;
+  
+  /**
+   * Clarify 模式：候选选项
+   */
+  clarifyOptions?: string[];
+  
+  /**
+   * Clarify 模式：不确定性字段名
+   */
+  clarifyField?: string;
+  
+  /**
+   * 关联的 SectionAiResult ID（用于后续应用 DocOps）
+   */
+  pendingResultId?: string;
+  
+  /**
+   * LLM 置信度
+   */
+  confidence?: number;
 }
 
 // ==========================================

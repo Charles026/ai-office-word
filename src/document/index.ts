@@ -48,6 +48,18 @@ export {
 
 export * from './DocumentEngine';
 
+// DocumentRuntime
+export {
+  DocumentRuntime,
+  documentRuntime,
+  useDocumentRuntime,
+} from './DocumentRuntime';
+
+export type {
+  DocumentRuntimeSnapshot,
+  IDocumentRuntime,
+} from './DocumentRuntime';
+
 // 从 section 导出
 export type {
   ParagraphType,

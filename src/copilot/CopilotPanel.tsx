@@ -22,7 +22,12 @@ import { CopilotInput } from './CopilotInput';
 import { callCopilotModel } from './copilotModelCaller';
 import { resolveCopilotCommandByRules, getRoughKind } from './copilotCommands';
 import { routeIntentWithLLM } from './intentRouterAgent';
-import { runCopilotCommand } from './copilotRuntimeBridge';
+import { 
+  runCopilotCommand, 
+  applyPreviewResult, 
+  cancelPreviewResult, 
+  resolveClarification 
+} from './copilotRuntimeBridge';
 import { undoCopilotAction } from './copilotUndo';
 import { createUserMessage, createAssistantMessage } from './copilotTypes';
 import './CopilotPanel.css';
@@ -173,6 +178,43 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
     }
   }, [docId, appendMessage]);
 
+  // v2 新增：应用预览
+  const handleApplyPreview = useCallback(async (pendingResultId: string) => {
+    setIsLoading(true);
+    try {
+      const success = await applyPreviewResult(pendingResultId);
+      if (!success) {
+        const errorMsg = createAssistantMessage('应用失败，请重试。');
+        appendMessage(docId, errorMsg);
+      }
+    } catch (error) {
+      console.error('[CopilotPanel] Apply preview error:', error);
+      const errorMsg = createAssistantMessage(`应用失败：${error instanceof Error ? error.message : '未知错误'}`);
+      appendMessage(docId, errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [docId, appendMessage]);
+
+  // v2 新增：取消预览
+  const handleCancelPreview = useCallback((pendingResultId: string) => {
+    cancelPreviewResult(pendingResultId);
+  }, []);
+
+  // v2 新增：解决澄清
+  const handleResolveClarify = useCallback(async (pendingResultId: string, choice: string) => {
+    setIsLoading(true);
+    try {
+      await resolveClarification(pendingResultId, choice);
+    } catch (error) {
+      console.error('[CopilotPanel] Resolve clarify error:', error);
+      const errorMsg = createAssistantMessage(`处理失败：${error instanceof Error ? error.message : '未知错误'}`);
+      appendMessage(docId, errorMsg);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [docId, appendMessage]);
+
   if (!visible) {
     return null;
   }
@@ -189,6 +231,9 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
         messages={messages}
         isLoading={isLoading}
         onUndo={handleUndo}
+        onApplyPreview={handleApplyPreview}
+        onCancelPreview={handleCancelPreview}
+        onResolveClarify={handleResolveClarify}
       />
       <CopilotInput
         context={context}

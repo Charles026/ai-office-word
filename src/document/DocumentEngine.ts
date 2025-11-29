@@ -18,7 +18,7 @@
  * - 操作必须是确定性的（相同输入 → 相同输出）
  */
 
-  import {
+import {
   DocOp,
   InsertParagraphOp,
   InsertTextOp,
@@ -39,6 +39,7 @@ import {
   ParagraphNode,
   HeadingNode,
   InlineNode,
+  TextMarks,
   createParagraph,
   createTextRun,
   createEmptyDocument,
@@ -46,6 +47,7 @@ import {
   getBlockIndex,
   getInlineText,
   hasInlineChildren,
+  generateNodeId,
 } from './types';
 
 // ==========================================
@@ -308,99 +310,218 @@ export class DocumentEngine {
   }
 
   private handleToggleBold(ast: DocumentAst, op: ToggleBoldOp): ApplyOpsResult {
-    const { nodeId, force } = op.payload;
-    
+    const { nodeId, startOffset, endOffset, force } = op.payload;
+    return this.applyInlineMark(ast, nodeId, startOffset, endOffset, 'bold', force);
+  }
+
+  /**
+   * 在指定范围内切换 inline mark
+   * 
+   * 【策略】
+   * 1. 将文本按选区边界拆分成多个 TextRunNode
+   * 2. 只对选区内的部分切换 mark
+   * 3. 选区外的部分保持不变
+   */
+  private applyInlineMark(
+    ast: DocumentAst,
+    nodeId: string,
+    startOffset: number,
+    endOffset: number,
+    markType: 'bold' | 'italic' | 'underline' | 'strikethrough',
+    force?: boolean
+  ): ApplyOpsResult {
     const block = findBlockById(ast, nodeId);
     if (!block || !hasInlineChildren(block)) {
       return { nextAst: ast, changed: false };
     }
 
-    const currentBold = block.children[0]?.type === 'text' ? block.children[0].marks?.bold : false;
-    const newBold = force !== undefined ? force : !currentBold;
+    // 获取当前文本和位置信息
+    const { runs, selectedRuns, beforeText, selectedText, afterText } = 
+      this.splitTextAtRange(block.children, startOffset, endOffset);
 
-    block.children = block.children.map(node => {
-      if (node.type === 'text') {
+    // 如果没有选中任何文本，不做任何改变
+    if (!selectedText) {
+      return { nextAst: ast, changed: false };
+    }
+
+    // 检查选区内是否已有该 mark
+    const hasMarkInSelection = selectedRuns.some(run => 
+      run.type === 'text' && run.marks?.[markType]
+    );
+
+    // 决定新的 mark 值
+    const newMarkValue = force !== undefined ? force : !hasMarkInSelection;
+
+    // 重建 children 数组
+    const newChildren: InlineNode[] = [];
+
+    // 添加选区前的内容（保持原样）
+    if (beforeText) {
+      const beforeRuns = this.extractRunsForRange(block.children, 0, startOffset);
+      newChildren.push(...beforeRuns);
+    }
+
+    // 添加选区内的内容（切换 mark）
+    if (selectedText) {
+      const selectedRunsWithNewMark = selectedRuns.map(run => {
+        if (run.type === 'text') {
         return {
-          ...node,
-          marks: { ...node.marks, bold: newBold },
+            ...run,
+            id: generateNodeId(), // 新 ID
+            marks: { ...run.marks, [markType]: newMarkValue },
         };
       }
-      return node;
+        return run;
     });
+      newChildren.push(...selectedRunsWithNewMark);
+    }
+
+    // 添加选区后的内容（保持原样）
+    if (afterText) {
+      const afterRuns = this.extractRunsForRange(block.children, endOffset, Infinity);
+      newChildren.push(...afterRuns);
+    }
+
+    // 合并相邻的相同格式的文本节点
+    block.children = this.mergeAdjacentTextRuns(newChildren);
 
     return { nextAst: ast, changed: true };
+  }
+
+  /**
+   * 根据偏移范围拆分文本节点
+   */
+  private splitTextAtRange(
+    children: InlineNode[],
+    startOffset: number,
+    endOffset: number
+  ): {
+    runs: InlineNode[];
+    selectedRuns: InlineNode[];
+    beforeText: string;
+    selectedText: string;
+    afterText: string;
+  } {
+    const fullText = getInlineText(children);
+    const beforeText = fullText.slice(0, startOffset);
+    const selectedText = fullText.slice(startOffset, endOffset);
+    const afterText = fullText.slice(endOffset);
+
+    // 提取选区内的文本节点
+    const selectedRuns = this.extractRunsForRange(children, startOffset, endOffset);
+
+    return {
+      runs: children,
+      selectedRuns,
+      beforeText,
+      selectedText,
+      afterText,
+    };
+  }
+
+  /**
+   * 提取指定范围内的文本节点（可能需要拆分）
+   */
+  private extractRunsForRange(
+    children: InlineNode[],
+    rangeStart: number,
+    rangeEnd: number
+  ): InlineNode[] {
+    const result: InlineNode[] = [];
+    let currentOffset = 0;
+
+    for (const node of children) {
+      if (node.type !== 'text') {
+        continue;
+      }
+
+      const nodeStart = currentOffset;
+      const nodeEnd = currentOffset + node.text.length;
+
+      // 检查是否与范围相交
+      if (nodeEnd <= rangeStart || nodeStart >= rangeEnd) {
+        // 不相交，跳过
+        currentOffset = nodeEnd;
+        continue;
+      }
+
+      // 计算在此节点内的有效范围
+      const effectiveStart = Math.max(0, rangeStart - nodeStart);
+      const effectiveEnd = Math.min(node.text.length, rangeEnd - nodeStart);
+
+      // 提取该范围内的文本
+      const extractedText = node.text.slice(effectiveStart, effectiveEnd);
+
+      if (extractedText) {
+        result.push({
+          id: generateNodeId(),
+          type: 'text',
+          text: extractedText,
+          marks: { ...node.marks },
+        });
+      }
+
+      currentOffset = nodeEnd;
+    }
+
+    return result;
+  }
+
+  /**
+   * 合并相邻的具有相同格式的文本节点
+   */
+  private mergeAdjacentTextRuns(children: InlineNode[]): InlineNode[] {
+    if (children.length <= 1) return children;
+
+    const result: InlineNode[] = [];
+
+    for (const node of children) {
+      if (node.type !== 'text') {
+        result.push(node);
+        continue;
+      }
+
+      const lastNode = result[result.length - 1];
+      if (lastNode?.type === 'text' && this.marksEqual(lastNode.marks, node.marks)) {
+        // 合并相邻的相同格式文本
+        result[result.length - 1] = {
+          ...lastNode,
+          text: lastNode.text + node.text,
+        };
+      } else {
+        result.push(node);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 比较两个 marks 是否相等
+   */
+  private marksEqual(a: TextMarks, b: TextMarks): boolean {
+    return (
+      !!a.bold === !!b.bold &&
+      !!a.italic === !!b.italic &&
+      !!a.underline === !!b.underline &&
+      !!a.strikethrough === !!b.strikethrough &&
+      !!a.code === !!b.code
+    );
   }
 
   private handleToggleItalic(ast: DocumentAst, op: ToggleItalicOp): ApplyOpsResult {
-    const { nodeId, force } = op.payload;
-    
-    const block = findBlockById(ast, nodeId);
-    if (!block || !hasInlineChildren(block)) {
-      return { nextAst: ast, changed: false };
-    }
-
-    const currentItalic = block.children[0]?.type === 'text' ? block.children[0].marks?.italic : false;
-    const newItalic = force !== undefined ? force : !currentItalic;
-
-    block.children = block.children.map(node => {
-      if (node.type === 'text') {
-        return {
-          ...node,
-          marks: { ...node.marks, italic: newItalic },
-        };
-      }
-      return node;
-    });
-
-    return { nextAst: ast, changed: true };
+    const { nodeId, startOffset, endOffset, force } = op.payload;
+    return this.applyInlineMark(ast, nodeId, startOffset, endOffset, 'italic', force);
   }
 
   private handleToggleUnderline(ast: DocumentAst, op: ToggleUnderlineOp): ApplyOpsResult {
-    const { nodeId, force } = op.payload;
-    
-    const block = findBlockById(ast, nodeId);
-    if (!block || !hasInlineChildren(block)) {
-      return { nextAst: ast, changed: false };
-    }
-
-    const currentUnderline = block.children[0]?.type === 'text' ? block.children[0].marks?.underline : false;
-    const newUnderline = force !== undefined ? force : !currentUnderline;
-
-    block.children = block.children.map(node => {
-      if (node.type === 'text') {
-        return {
-          ...node,
-          marks: { ...node.marks, underline: newUnderline },
-        };
-      }
-      return node;
-    });
-
-    return { nextAst: ast, changed: true };
+    const { nodeId, startOffset, endOffset, force } = op.payload;
+    return this.applyInlineMark(ast, nodeId, startOffset, endOffset, 'underline', force);
   }
 
   private handleToggleStrike(ast: DocumentAst, op: ToggleStrikeOp): ApplyOpsResult {
-    const { nodeId, force } = op.payload;
-    
-    const block = findBlockById(ast, nodeId);
-    if (!block || !hasInlineChildren(block)) {
-      return { nextAst: ast, changed: false };
-    }
-
-    const currentStrike = block.children[0]?.type === 'text' ? block.children[0].marks?.strikethrough : false;
-    const newStrike = force !== undefined ? force : !currentStrike;
-
-    block.children = block.children.map(node => {
-      if (node.type === 'text') {
-        return {
-          ...node,
-          marks: { ...node.marks, strikethrough: newStrike },
-        };
-      }
-      return node;
-    });
-
-    return { nextAst: ast, changed: true };
+    const { nodeId, startOffset, endOffset, force } = op.payload;
+    return this.applyInlineMark(ast, nodeId, startOffset, endOffset, 'strikethrough', force);
   }
 
   private handleDeleteNode(ast: DocumentAst, op: DeleteNodeOp): ApplyOpsResult {
