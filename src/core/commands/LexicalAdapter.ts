@@ -63,7 +63,7 @@ import {
 } from '@lexical/list';
 
 // 新路径依赖
-import { shouldUseCommandBus } from './featureFlags';
+import { shouldUseCommandBus, getCommandFeatureFlags } from './featureFlags';
 import { commandBus } from './CommandBus';
 import { reconcileAstToLexical } from './LexicalReconciler';
 import { lexicalSelectionToDocSelection, syncLexicalToRuntime } from './LexicalBridge';
@@ -153,6 +153,20 @@ function $isAllListType(listType: 'bullet' | 'number'): boolean {
 // ==========================================
 
 /**
+ * 判断命令是否为 inline format 类型
+ */
+function isInlineFormatCommand(commandId: string): boolean {
+  return ['toggleBold', 'toggleItalic', 'toggleUnderline', 'toggleStrikethrough'].includes(commandId);
+}
+
+/**
+ * 判断命令是否为 history 类型
+ */
+function isHistoryCommand(commandId: string): boolean {
+  return commandId === 'undo' || commandId === 'redo';
+}
+
+/**
  * 通过 CommandBus 执行命令
  * 
  * 【流程】
@@ -160,23 +174,71 @@ function $isAllListType(listType: 'bullet' | 'number'): boolean {
  * 2. 通过 CommandBus 执行命令
  * 3. 将结果同步回 Lexical
  * 
+ * 【重要：边界收紧】(2025-11)
+ * - 当 featureFlag 开启时，命令只走 CommandBus → DocOps → DocumentEngine
+ * - 失败时不再 fallback 到 Lexical，而是 no-op + warn
+ * - 这确保了数据一致性：AST 和 Lexical 状态保持同步
+ * 
  * @param editor - Lexical 编辑器实例
  * @param commandId - 命令 ID
  * @param payload - 命令参数
- * @returns 是否执行成功
+ * @returns 执行结果对象 { handled: boolean, success: boolean }
  */
+interface CommandExecutionResult {
+  /** 命令是否被处理（true = 不需要 fallback） */
+  handled: boolean;
+  /** 命令是否执行成功 */
+  success: boolean;
+}
+
 function executeCommandViaCommandBus(
   editor: LexicalEditor,
   commandId: string,
   payload?: any
-): boolean {
+): CommandExecutionResult {
+  const flags = getCommandFeatureFlags();
+  
   try {
     const runtime = commandBus.getRuntime();
-    const isHistoryCommand = commandId === 'undo' || commandId === 'redo';
+    const historyCmd = isHistoryCommand(commandId);
     
-    // undo/redo 不同步状态（会清空历史栈），直接使用 runtime 当前状态
-    // 其他命令需要先同步 Lexical 状态到 runtime
-    if (!isHistoryCommand) {
+    // ==========================================
+    // History 命令特殊处理
+    // ==========================================
+    if (historyCmd && flags.useCommandBusForHistory) {
+      const snapshot = runtime.getSnapshot();
+      
+      // 检查是否有历史可操作
+      if (commandId === 'undo' && !snapshot.canUndo) {
+        console.log(`[LexicalAdapter] No DocumentRuntime history to undo (no-op)`);
+        // 🔴 不再 fallback 到 Lexical，直接 no-op
+        return { handled: true, success: false };
+      }
+      if (commandId === 'redo' && !snapshot.canRedo) {
+        console.log(`[LexicalAdapter] No DocumentRuntime history to redo (no-op)`);
+        // 🔴 不再 fallback 到 Lexical，直接 no-op
+        return { handled: true, success: false };
+      }
+      
+      // 执行 undo/redo
+      const result = commandBus.executeWithRuntime(commandId as any);
+      
+      if (result.success) {
+        reconcileAstToLexical(editor, result.nextAst, {
+          selection: result.nextSelection,
+        });
+        console.log(`[LexicalAdapter] DocumentRuntime ${commandId} succeeded`);
+        return { handled: true, success: true };
+      }
+      
+      console.warn(`[LexicalAdapter] DocumentRuntime ${commandId} failed:`, result.error);
+      return { handled: true, success: false };
+    }
+    
+    // ==========================================
+    // 其他命令：先同步状态，再执行
+    // ==========================================
+    if (!historyCmd) {
       syncLexicalToRuntime(editor, runtime);
     }
     
@@ -184,24 +246,11 @@ function executeCommandViaCommandBus(
     const busCommandId = mapToBusCommandId(commandId);
     if (!busCommandId) {
       console.warn(`[LexicalAdapter] No CommandBus mapping for: ${commandId}`);
-      return false;
+      return { handled: false, success: false };
     }
 
     // 转换 payload
     const busPayload = mapPayload(commandId, payload);
-
-    // 检查 undo/redo 是否有历史可操作
-    if (isHistoryCommand) {
-      const snapshot = runtime.getSnapshot();
-      if (commandId === 'undo' && !snapshot.canUndo) {
-        console.log(`[LexicalAdapter] No history to undo, falling back to Lexical`);
-        return false; // 回退到 Lexical 的 undo
-      }
-      if (commandId === 'redo' && !snapshot.canRedo) {
-        console.log(`[LexicalAdapter] No history to redo, falling back to Lexical`);
-        return false; // 回退到 Lexical 的 redo
-      }
-    }
 
     // 执行命令
     const result = commandBus.executeWithRuntime(busCommandId as any, busPayload);
@@ -213,14 +262,32 @@ function executeCommandViaCommandBus(
       });
       
       console.log(`[LexicalAdapter] CommandBus path succeeded for: ${commandId}`);
-      return true;
+      return { handled: true, success: true };
+    }
+
+    // 🔴 对于 inline format 命令，失败时不再 fallback
+    if (isInlineFormatCommand(commandId) && flags.useCommandBusForFormat) {
+      console.warn(`[LexicalAdapter] CommandBus failed for ${commandId}, no fallback (DocOps boundary enforced):`, result.error);
+      return { handled: true, success: false };
     }
 
     console.warn(`[LexicalAdapter] CommandBus execution failed:`, result.error);
-    return false;
+    return { handled: false, success: false };
   } catch (error) {
     console.error(`[LexicalAdapter] CommandBus path error:`, error);
-    return false;
+    
+    // 🔴 对于受 feature flag 保护的命令，不允许 fallback
+    const flags = getCommandFeatureFlags();
+    if (isInlineFormatCommand(commandId) && flags.useCommandBusForFormat) {
+      console.warn(`[LexicalAdapter] Error in ${commandId}, no fallback (DocOps boundary enforced)`);
+      return { handled: true, success: false };
+    }
+    if (isHistoryCommand(commandId) && flags.useCommandBusForHistory) {
+      console.warn(`[LexicalAdapter] Error in ${commandId}, no fallback (DocOps boundary enforced)`);
+      return { handled: true, success: false };
+    }
+    
+    return { handled: false, success: false };
   }
 }
 
@@ -269,21 +336,29 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
   // 🆕 Feature Flag: 使用 CommandBus 新路径
   // ==========================================
   if (shouldUseCommandBus(commandId)) {
-    const success = executeCommandViaCommandBus(editor, commandId, payload);
-    if (success) {
-      return; // 新路径执行成功，直接返回
+    const result = executeCommandViaCommandBus(editor, commandId, payload);
+    if (result.handled) {
+      // 命令已被 CommandBus 处理（无论成功与否），不再 fallback
+      if (!result.success) {
+        console.log(`[LexicalAdapter] Command "${commandId}" was handled but failed (no fallback)`);
+      }
+      return;
     }
-    // 新路径失败，fallback 到旧路径
-    console.warn(`[LexicalAdapter] CommandBus path failed for "${commandId}", falling back to legacy path`);
+    // 命令未被处理（可能是命令未注册），允许 fallback 到旧路径
+    console.warn(`[LexicalAdapter] CommandBus did not handle "${commandId}", falling back to legacy path`);
   }
 
   // ==========================================
   // 旧路径：直接操作 Lexical
+  // 
+  // ⚠️ TODO(docops-boundary): 当对应的 feature flag 开启时，
+  // 这些旧路径应该永远不会被执行到。
+  // 如果你看到这些代码被执行，说明有 bug。
   // ==========================================
   switch (commandId) {
     // Editing
     case 'insertText':
-      // TODO(docops-boundary): Bypasses CommandBus. Should use commandBus.execute('insertText', ...)
+      // TODO(docops-boundary): 待迁移到 useCommandBusForEdit
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {
@@ -293,16 +368,21 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
       break;
 
     // Text Formatting
+    // TODO(docops-boundary): 以下 format 命令在 useCommandBusForFormat=true 时不应执行
     case 'toggleBold':
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleBold via Lexical (should use CommandBus)');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold');
       break;
     case 'toggleItalic':
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleItalic via Lexical (should use CommandBus)');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic');
       break;
     case 'toggleUnderline':
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleUnderline via Lexical (should use CommandBus)');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline');
       break;
     case 'toggleStrikethrough':
+      console.warn('[LexicalAdapter] LEGACY PATH: toggleStrikethrough via Lexical (should use CommandBus)');
       editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'strikethrough');
       break;
     case 'clearFormat':
@@ -321,10 +401,13 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
       break;
 
     // History
+    // TODO(docops-boundary): 以下 history 命令在 useCommandBusForHistory=true 时不应执行
     case 'undo':
+      console.warn('[LexicalAdapter] LEGACY PATH: undo via Lexical UNDO_COMMAND (should use DocumentRuntime)');
       editor.dispatchCommand(UNDO_COMMAND, undefined);
       break;
     case 'redo':
+      console.warn('[LexicalAdapter] LEGACY PATH: redo via Lexical REDO_COMMAND (should use DocumentRuntime)');
       editor.dispatchCommand(REDO_COMMAND, undefined);
       break;
 

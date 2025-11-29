@@ -280,25 +280,50 @@ console.log('Can redo:', engine.canRedo());
 
 ---
 
-## 4. 边界违规清单
+## 4. 边界收紧状态 (2025-11 更新)
+
+### ✅ 已完全走 CommandBus + DocumentEngine 的命令
+
+以下命令在 Feature Flag 开启时，**完全走 DocOps 路径**，失败时不再 fallback 到 Lexical：
+
+| 命令类型 | Feature Flag | 命令列表 | 状态 |
+|----------|--------------|----------|------|
+| **Inline Format** | `useCommandBusForFormat` | `toggleBold`, `toggleItalic`, `toggleUnderline`, `toggleStrikethrough` | ✅ 已完成 |
+| **History** | `useCommandBusForHistory` | `undo`, `redo` | ✅ 已完成 |
+
+**边界执行策略**：
+- 当 Feature Flag 开启时，命令只走 `CommandBus → DocOps → DocumentEngine`
+- 如果 CommandBus 执行失败，**不再 fallback 到 Lexical**，而是 no-op + warn
+- 这确保了 AST 和 Lexical 状态的一致性
+
+### 🔄 待迁移的命令
+
+| 命令类型 | Feature Flag | 命令列表 | 状态 |
+|----------|--------------|----------|------|
+| **Block Type** | `useCommandBusForBlockType` | `setBlockTypeParagraph`, `setBlockTypeHeading1/2/3` | 🔄 已实现，需验证 |
+| **Edit** | `useCommandBusForEdit` | `insertText`, `deleteRange`, `splitBlock` | 🔄 已实现，需验证 |
+
+---
+
+## 5. 边界违规清单
 
 以下是当前仍存在"越界"逻辑的地方，需要在后续版本中重构：
 
-### 4.1 高优先级 (影响核心编辑)
+### 5.1 高优先级 (影响核心编辑)
 
 | 文件 | 问题 | 状态 |
 |------|------|------|
-| `LexicalAdapter.ts` | 部分命令仍直接操作 Lexical | 🔄 通过 Feature Flag 逐步迁移 |
+| `LexicalAdapter.ts` | clearFormat、列表命令等仍直接操作 Lexical | 🔄 通过 Feature Flag 逐步迁移 |
 | `sectionAiActions.ts` | `applyDocOps` 直接操作 Lexical 节点 | ⚠️ TODO(docops-boundary) |
 
-### 4.2 中优先级 (影响特定功能)
+### 5.2 中优先级 (影响特定功能)
 
 | 文件 | 问题 | 状态 |
 |------|------|------|
 | `DocumentCanvas.tsx` | UI 事件处理器直接构造 DocOps | ⚠️ 待重构 |
 | `copilotRuntimeBridge.ts` | 部分 AI 操作绕过 CommandBus | ⚠️ 待重构 |
 
-### 4.3 低优先级 (可延后)
+### 5.3 低优先级 (可延后)
 
 | 文件 | 问题 | 状态 |
 |------|------|------|
@@ -308,9 +333,9 @@ console.log('Can redo:', engine.canRedo());
 
 ---
 
-## 5. 测试指南
+## 6. 测试指南
 
-### 5.1 单元测试
+### 6.1 单元测试
 
 ```bash
 # 运行所有测试
@@ -323,15 +348,55 @@ npm test -- --run src/document/__tests__/marks.toggle.test.ts
 npm test -- --run src/core/commands/__tests__/
 npm test -- --run src/document/__tests__/
 npm test -- --run src/docops/__tests__/
+
+# 运行边界测试
+npm test -- --run src/core/commands/__tests__/DocOpsBoundary.test.ts
 ```
 
-### 5.2 手动测试 Checklist
+### 6.2 手动测试 Checklist (开发模式)
 
-参见 `docs/docops-runtime-notes.md` 中的完整 Checklist。
+在 DevTools Console 中启用 Feature Flags：
+
+```javascript
+// 启用所有新路径
+__commandFeatureFlags.set({
+  useCommandBusForFormat: true,
+  useCommandBusForHistory: true,
+});
+```
+
+#### Format 命令测试
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 打开一个带文字的文档 | 文档正常显示 |
+| 2 | 选中一个词 → 点击 Bold | 只该词加粗，其他格式不丢 |
+| 3 | 对同一词点击 Italic | 该词同时有 Bold + Italic |
+| 4 | 对另一词点击 Underline | 该词加下划线 |
+| 5 | 连续操作 Bold/Italic/Underline | 所有操作通过 DocOps 完成 |
+| 6 | 检查控制台 | 无 "LEGACY PATH" warn |
+
+#### Undo/Redo 命令测试
+
+| 步骤 | 操作 | 预期结果 |
+|------|------|----------|
+| 1 | 执行上述 Format 操作 | 格式已应用 |
+| 2 | 点击 Undo | 格式按顺序撤销 |
+| 3 | 多次 Undo | 直到无法再 Undo |
+| 4 | 点击 Redo | 格式按顺序重做 |
+| 5 | 检查控制台 | 无 Lexical UNDO_COMMAND 相关 warn |
+
+#### 边缘情况测试
+
+| 场景 | 操作 | 预期结果 |
+|------|------|----------|
+| 空文档 | 新建空文档 → Bold | 不崩溃，no-op |
+| 无选区 | 取消选区 → Bold | 不崩溃，no-op |
+| 跨段落选区 | 选中跨段落文字 → Bold | 不崩溃，显示错误提示或 no-op |
 
 ---
 
-## 6. FAQ
+## 7. FAQ
 
 ### Q: 为什么要用 DocOps 而不是直接操作 Lexical？
 
@@ -357,7 +422,16 @@ npm test -- --run src/docops/__tests__/
 3. 在 Reconciler 中处理 AST → Lexical 的映射
 4. 如果 Lexical 无法表达，考虑自定义 Lexical Node
 
+### Q: 边界收紧后，CommandBus 失败会怎样？
+
+**A**: 
+当 Feature Flag 开启时，如果 CommandBus 执行失败：
+- **不会** fallback 到 Lexical 直接操作
+- 会记录 warn 日志
+- 操作变为 no-op（不做任何改变）
+- 这确保了 AST 和 Lexical 状态的一致性
+
 ---
 
-*最后更新：2025-11*
+*最后更新：2025-11-29*
 
