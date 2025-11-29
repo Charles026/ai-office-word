@@ -1,5 +1,5 @@
 /**
- * Section AI Actions - 统一的 Section 级 AI 操作入口
+ * Section AI Actions - 统一的 Section 级 AI 操作入口 (v2)
  * 
  * 【职责】
  * - 提供 UI 层调用 Section AI 的统一入口
@@ -14,6 +14,11 @@
  * 【调用链路】
  * UI → runSectionAiAction → extractSectionContext → IntentBuilder 
  *    → buildSectionPrompt → DocAgentRuntime.run → DocOps Diff → applyDocOps
+ * 
+ * 【v2 新增：处事原则与不确定性协议】
+ * - 支持 responseMode: auto_apply / preview / clarify
+ * - 返回 confidence / uncertainties 供 UI 呈现
+ * - clarify 模式支持澄清问题和用户选择
  */
 
 import { 
@@ -51,13 +56,18 @@ import {
 import {
   logAiRewriteApplied,
   logAiSummaryApplied,
+  logAiIntentGenerated,
 } from '../interaction';
 import { copilotStore } from '../copilot/copilotStore';
 import { copilotDebugStore } from '../copilot/copilotDebugStore';
 import { generateDebugId } from '../copilot/copilotDebugTypes';
 import type { CopilotDebugSnapshot, DebugMessage } from '../copilot/copilotDebugTypes';
-import { parseCanonicalIntent } from '../ai/intent/intentSchema';
-import type { CanonicalIntent } from '../ai/intent/intentTypes';
+import { parseCanonicalIntent, IntentParseError } from '../ai/intent/intentSchema';
+import type {
+  CanonicalIntent,
+  CopilotResponseMode,
+  IntentUncertainty,
+} from '../ai/intent/intentTypes';
 import { parseDocOpsPlan, validateDocOpsPlan } from '../ai/docops/docOpsSchema';
 import type { DocOpsPlan } from '../ai/docops/docOpsTypes';
 
@@ -103,7 +113,9 @@ export interface SectionAiContext {
 }
 
 /**
- * Section AI 执行结果
+ * Section AI 执行结果 (v2)
+ * 
+ * 新增：responseMode / confidence / uncertainties 字段
  */
 export interface SectionAiResult {
   success: boolean;
@@ -112,6 +124,25 @@ export interface SectionAiResult {
   docOpsPlan?: DocOpsPlan;
   assistantText?: string;
   error?: string;
+  /**
+   * Copilot 建议的响应模式
+   * - auto_apply: 已直接应用修改
+   * - preview: 需要 UI 展示预览供用户确认
+   * - clarify: 需要 UI 展示澄清问题
+   */
+  responseMode?: CopilotResponseMode;
+  /**
+   * LLM 对意图理解的信心度 (0~1)
+   */
+  confidence?: number;
+  /**
+   * LLM 认为不确定的部分（用于 clarify 模式）
+   */
+  uncertainties?: IntentUncertainty[];
+  /**
+   * 是否已应用修改（仅在 auto_apply 模式下为 true）
+   */
+  applied?: boolean;
 }
 
 // ==========================================
@@ -252,6 +283,28 @@ function extractParagraphsFromPlan(plan: DocOpsPlan): LlmParagraphOutput[] {
   return [];
 }
 
+/**
+ * 去除 JSON 字符串中的 Markdown 代码块包装
+ * 
+ * 例如：
+ * ```json
+ * { "foo": "bar" }
+ * ```
+ * 会被转换为：
+ * { "foo": "bar" }
+ */
+function stripMarkdownCodeBlock(text: string): string {
+  let result = text.trim();
+  
+  // 去除开头的 ```json 或 ``` 标记
+  result = result.replace(/^```(?:json|JSON)?\s*\n?/m, '');
+  
+  // 去除结尾的 ``` 标记
+  result = result.replace(/\n?```\s*$/m, '');
+  
+  return result.trim();
+}
+
 function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
   const rawSnippet = text.slice(0, 400);
   const trimmed = text.trim();
@@ -274,8 +327,14 @@ function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
     .slice(0, intentIndex)
     .replace(/^\s*\[assistant\]\s*/i, '')
     .trim();
-  const intentSegment = trimmed.slice(intentIndex + intentMarker.length, docopsIndex).trim();
-  const docopsSegment = trimmed.slice(docopsIndex + docopsMarker.length).trim();
+  
+  // 🆕 去除可能的 Markdown 代码块包装
+  const intentSegment = stripMarkdownCodeBlock(
+    trimmed.slice(intentIndex + intentMarker.length, docopsIndex)
+  );
+  const docopsSegment = stripMarkdownCodeBlock(
+    trimmed.slice(docopsIndex + docopsMarker.length)
+  );
 
   if (!intentSegment) {
     throw new LlmParseError('AI 返回的 [intent] 内容为空', rawSnippet);
@@ -289,10 +348,19 @@ function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
     const intentJson = JSON.parse(intentSegment);
     canonicalIntent = parseCanonicalIntent(intentJson);
   } catch (error) {
+    // 🆕 增强错误信息，显示原始内容片段和 Zod 错误详情
+    const errorDetail = error instanceof Error ? error.message : String(error);
+    const errorCause = error instanceof IntentParseError ? error.cause : undefined;
+    
+    console.error('[SectionAI] Intent parse error:', {
+      errorDetail,
+      errorCause: JSON.stringify(errorCause, null, 2),
+      intentSegmentPreview: intentSegment.slice(0, 300),
+    });
     throw new LlmParseError(
       '解析 CanonicalIntent 失败',
       intentSegment.slice(0, 200),
-      error instanceof Error ? error.message : String(error)
+      `${errorDetail} ${errorCause ? JSON.stringify(errorCause) : ''}`
     );
   }
 
@@ -301,10 +369,16 @@ function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
     const planJson = JSON.parse(docopsSegment);
     docOpsPlan = parseDocOpsPlan(planJson);
   } catch (error) {
+    // 🆕 增强错误信息
+    const errorDetail = error instanceof Error ? error.message : String(error);
+    console.error('[SectionAI] DocOps parse error:', {
+      errorDetail,
+      docopsSegmentPreview: docopsSegment.slice(0, 300),
+    });
     throw new LlmParseError(
       '解析 DocOpsPlan 失败',
       docopsSegment.slice(0, 200),
-      error instanceof Error ? error.message : String(error)
+      errorDetail
     );
   }
 
@@ -349,6 +423,11 @@ export async function applyDocOps(
   editor: LexicalEditor,
   docOps: SectionDocOp[]
 ): Promise<void> {
+  // TODO(docops-boundary):
+  // - 这里直接操作 Lexical 节点，绕过了 DocumentEngine 和 CommandBus
+  // - 目标：将 DocOps 转换为标准 DocumentEngine 调用，或通过 CommandBus 执行
+  // - 目前仅标记，保留 Lexical 操作以维持 UI 功能
+
   // 使用 Lexical 的 update 方法应用修改
   return new Promise((resolve, reject) => {
     editor.update(
@@ -632,6 +711,52 @@ export async function runSectionAiAction(
       }
       copilotDebugStore.setSnapshot(debugSnapshot);
     }
+
+    // 5.1 🆕 提取 v2 字段：responseMode / confidence / uncertainties
+    const responseMode: CopilotResponseMode = protocolOutput.intent.responseMode ?? 'auto_apply';
+    const confidence = protocolOutput.intent.confidence;
+    const uncertainties = protocolOutput.intent.uncertainties;
+
+    if (__DEV__) {
+      console.debug('[SectionAI] v2 Protocol:', {
+        responseMode,
+        confidence,
+        uncertaintiesCount: uncertainties?.length ?? 0,
+      });
+    }
+
+    // 🆕 记录 Intent 生成事件
+    const activeDocIdForLog = copilotStore.getContext().docId;
+    if (activeDocIdForLog) {
+      logAiIntentGenerated(activeDocIdForLog, sectionId, {
+        intentId: protocolOutput.intent.intentId,
+        responseMode,
+        confidence,
+        uncertaintiesCount: uncertainties?.length,
+        sectionTitle: sectionContext.titleText ?? undefined,
+      });
+    }
+
+    // 5.2 🆕 如果是 clarify 模式，不应用 DocOps，直接返回结果供 UI 处理
+    if (responseMode === 'clarify') {
+      console.log('[SectionAI] Clarify mode - not applying DocOps');
+      
+      dismissToast(loadingToastId);
+      addToast('AI 需要进一步确认您的意图', 'info');
+
+      commitSnapshot();
+
+      return {
+        success: true,
+        intent: protocolOutput.intent,
+        docOpsPlan: protocolOutput.docOpsPlan,
+        assistantText: protocolOutput.assistantText,
+        responseMode: 'clarify',
+        confidence,
+        uncertainties,
+        applied: false,
+      };
+    }
     
     // 6. 根据 scope 选择目标段落
     // rewrite 时根据 scope 选择 own 或 subtree；其他操作使用 own
@@ -708,10 +833,33 @@ export async function runSectionAiAction(
 
     console.log('[SectionAI] DocOps built:', docOps.length);
 
-    // 7. 应用 DocOps
+    // 🆕 7. 根据 responseMode 决定是否应用 DocOps
+    if (responseMode === 'preview') {
+      // preview 模式：不自动应用，返回结果供 UI 预览
+      console.log('[SectionAI] Preview mode - returning DocOps without applying');
+      
+      dismissToast(loadingToastId);
+      addToast('已生成预览，请确认后应用', 'info');
+
+      commitSnapshot();
+
+      return {
+        success: true,
+        docOps,
+        intent: protocolOutput.intent,
+        docOpsPlan: protocolOutput.docOpsPlan,
+        assistantText: protocolOutput.assistantText,
+        responseMode: 'preview',
+        confidence,
+        uncertainties,
+        applied: false,
+      };
+    }
+
+    // auto_apply 模式：自动应用 DocOps
     if (docOps.length > 0) {
       await applyDocOps(editor, docOps);
-      console.log('[SectionAI] DocOps applied');
+      console.log('[SectionAI] DocOps applied (auto_apply mode)');
     } else {
       console.log('[SectionAI] No changes needed');
     }
@@ -749,6 +897,10 @@ export async function runSectionAiAction(
       intent: protocolOutput.intent,
       docOpsPlan: protocolOutput.docOpsPlan,
       assistantText: protocolOutput.assistantText,
+      responseMode: 'auto_apply',
+      confidence,
+      uncertainties,
+      applied: true,
     };
   } catch (error) {
     // 错误处理
@@ -808,5 +960,115 @@ export async function expandSection(
   options?: ExpandSectionOptions
 ): Promise<SectionAiResult> {
   return runSectionAiAction('expand', sectionId, context, { expand: options });
+}
+
+// ==========================================
+// v2 新增：Preview 模式和 Clarify 模式支持
+// ==========================================
+
+/**
+ * 应用待处理的 DocOps（用于 preview 模式确认后）
+ * 
+ * @param editor - Lexical 编辑器实例
+ * @param pendingResult - 之前返回的 SectionAiResult（responseMode=preview）
+ * @returns 是否成功应用
+ */
+export async function applyPendingDocOps(
+  editor: LexicalEditor,
+  pendingResult: SectionAiResult
+): Promise<boolean> {
+  if (!pendingResult.docOps || pendingResult.docOps.length === 0) {
+    console.warn('[SectionAI] No pending DocOps to apply');
+    return false;
+  }
+
+  try {
+    await applyDocOps(editor, pendingResult.docOps);
+    console.log('[SectionAI] Pending DocOps applied successfully');
+    
+    // 记录交互事件
+    const activeDocId = copilotStore.getContext().docId;
+    if (activeDocId && pendingResult.intent?.scope.sectionId) {
+      const sectionId = pendingResult.intent.scope.sectionId;
+      const tasks = pendingResult.intent.tasks;
+      
+      if (tasks.some(t => t.type === 'rewrite')) {
+        logAiRewriteApplied(activeDocId, sectionId, {
+          actionKind: 'rewrite_intro',
+        });
+      } else if (tasks.some(t => t.type === 'summarize')) {
+        logAiSummaryApplied(activeDocId, sectionId);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('[SectionAI] Failed to apply pending DocOps:', error);
+    return false;
+  }
+}
+
+/**
+ * Clarify 模式：用户选择后的重新调用参数
+ */
+export interface ClarificationChoice {
+  /** 原始意图 */
+  originalIntent: CanonicalIntent;
+  /** 被澄清的不确定性 */
+  uncertainty: IntentUncertainty;
+  /** 用户选择的选项（来自 candidateOptions）或自定义输入 */
+  userChoice: string;
+}
+
+/**
+ * 带澄清的 Section AI 调用（用于 clarify 模式用户选择后）
+ * 
+ * 将用户选择作为附加约束，重新调用 Section AI
+ * 
+ * @param action - 操作类型
+ * @param sectionId - Section ID
+ * @param context - 执行上下文
+ * @param clarification - 澄清信息
+ * @param options - 操作选项
+ */
+export async function triggerSectionAiWithClarification(
+  action: SectionAiAction,
+  sectionId: string,
+  context: SectionAiContext,
+  clarification: ClarificationChoice,
+  options?: SectionAiOptions
+): Promise<SectionAiResult> {
+  const { uncertainty, userChoice } = clarification;
+  
+  // 构造澄清后的 customPrompt，追加用户选择
+  const clarificationPrompt = `
+补充说明：对于之前提到的不确定点「${uncertainty.field}」（原因：${uncertainty.reason}），
+用户选择了：${userChoice}。
+请据此重新生成 Intent 和 DocOpsPlan，并将 responseMode 设为 "auto_apply" 或 "preview"（不要再次 clarify）。
+`;
+
+  // 合并到选项中
+  const mergedOptions: SectionAiOptions = {
+    ...options,
+    rewrite: options?.rewrite ? {
+      ...options.rewrite,
+      customPrompt: (options.rewrite.customPrompt || '') + clarificationPrompt,
+    } : { customPrompt: clarificationPrompt } as any,
+    summarize: options?.summarize ? {
+      ...options.summarize,
+      customPrompt: (options.summarize.customPrompt || '') + clarificationPrompt,
+    } : { customPrompt: clarificationPrompt } as any,
+    expand: options?.expand ? {
+      ...options.expand,
+      customPrompt: (options.expand.customPrompt || '') + clarificationPrompt,
+    } : { customPrompt: clarificationPrompt } as any,
+  };
+
+  console.log('[SectionAI] Triggering with clarification:', {
+    field: uncertainty.field,
+    userChoice,
+  });
+
+  return runSectionAiAction(action, sectionId, context, mergedOptions);
 }
 

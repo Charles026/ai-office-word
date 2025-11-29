@@ -27,6 +27,10 @@ export {
   type UserUndoMeta,
   type UserHeadingChangedMeta,
   type SystemSnapshotMeta,
+  // v2 Intent Protocol meta 类型
+  type AiIntentGeneratedMeta,
+  type AiIntentClarifyShownMeta,
+  type AiIntentClarifyResolvedMeta,
   // 辅助函数
   generateInteractionId,
   createInteractionEvent,
@@ -56,6 +60,10 @@ export {
   logUserHeadingChanged,
   logSystemSnapshotCreated,
   logAiSelectionRewriteApplied,
+  // v2 Intent Protocol 便捷函数
+  logAiIntentGenerated,
+  logAiIntentClarifyShown,
+  logAiIntentClarifyResolved,
 } from './interactionLog';
 
 // 行为摘要 v1（保留）

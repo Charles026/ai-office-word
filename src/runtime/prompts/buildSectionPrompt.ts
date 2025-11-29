@@ -1,5 +1,5 @@
 /**
- * Section Prompt Builder
+ * Section Prompt Builder (v2)
  * 
  * Used by DocAgentRuntime during Section-level AI actions (rewrite/summarize/expand).
  * Pure function. No side effects.
@@ -12,6 +12,11 @@
  * - 输出为纯字符串，不包含 LLM API 逻辑
  * - Prompt 风格：规则化、结构化、分段清晰
  * - 支持未来扩展：章节重排、版本对比等
+ * 
+ * 【v2 新增：处事原则与不确定性协议】
+ * - 在 System Prompt 中注入「Copilot 处事原则」
+ * - 输出格式要求包含 confidence/uncertainties/responseMode
+ * - LLM 需要根据 BehaviorSummary 做连续性和安全性决策
  */
 
 import {
@@ -34,6 +39,31 @@ const __DEV__ = typeof process !== 'undefined' && process.env.NODE_ENV === 'deve
 // ==========================================
 
 /**
+ * Copilot 处事原则 (v2)
+ * 
+ * 这段原则强调连续性、保守性、不确定时澄清，避免硬编码阈值
+ */
+const COPILOT_PRINCIPLES = `
+=== Copilot 处事原则 ===
+
+你的目标不是简单执行指令，而是成为用户的长期写作伙伴。
+
+遇到用户指令不够具体时：
+- 优先保持与用户最近几次操作风格的"连续性"（例如：结构、长度、标重点的粒度），而不是发明一种完全不同的新风格。
+- 如果根据行为和当前指令仍然无法确定最佳方案，并且不同方案会带来很不一样的结果（例如：删掉大量内容、彻底改写结构），请选择更保守的方案：少改一点，让结果更容易被撤销或继续调整。
+
+遇到真正高不确定性、且会显著影响内容结构或信息量的情况：
+- 不要假装自己"完全懂了"，而是将不确定点记录在 uncertainties 中，并设置 responseMode = "clarify"。
+- 用简短自然语言提出一个非常具体的问题，并给出 2~3 个候选选项，方便用户快速选择。
+
+在大多数情况下，如果你对意图的理解比较清晰，且改动不会造成严重信息损失：
+- 可以设置 responseMode = "auto_apply"，直接在文档中应用修改，同时在自然语言回应中简单说明你"打算怎么改"，让用户心里有数。
+
+如果你对意图理解足够清晰，但改动涉及较多内容（例如长段落重写、合并多段）：
+- 更推荐使用 responseMode = "preview"，先生成一个预览结果（例如新版本内容），让用户确认后再应用到文档。
+`;
+
+/**
  * 基础 System Prompt 模板
  */
 const BASE_SYSTEM_PROMPT = `You are an AI writing assistant specialized in structured document editing (Word/Docx style).
@@ -44,7 +74,8 @@ You must NOT merge or split paragraphs unless instructed.
 Maintain semantic fidelity while applying the requested transformation.
 Do not invent new content unless expand mode is used.
 Do not include any meta commentary.
-Output in the same language as the input content.`;
+Output in the same language as the input content.
+${COPILOT_PRINCIPLES}`;
 
 /**
  * 根据模式获取 System Prompt
@@ -186,7 +217,9 @@ function getTaskInstruction(mode: PromptMode, options?: AgentIntentOptions): str
 // ==========================================
 
 /**
- * 获取输出格式要求
+ * 获取输出格式要求 (v2)
+ * 
+ * 新增：confidence / uncertainties / responseMode 字段
  */
 function getOutputFormatInstruction(): string {
   return `OUTPUT FORMAT (STRICT):
@@ -195,11 +228,48 @@ Always respond using the following blocks (plain text, no Markdown code fences):
 
 [assistant]
 Your short natural-language acknowledgement for the user (1-2 sentences).
+If responseMode is "clarify", this should be a specific question with 2-3 candidate options.
 
 [intent]
-{ "intentId": "...", "scope": { ... }, "tasks": [ ... ] }
-- Must be a valid CanonicalIntent JSON. interactionMode defaults to "apply_directly".
-- scope.target MUST match the document portion you modified.
+{
+  "intentId": "...",
+  "scope": { "sectionId": "<current section id>" },
+  "tasks": [ ... ],
+  "confidence": 0.85,
+  "uncertainties": [
+    {
+      "field": "tasks[0].params.length",
+      "reason": "用户只说'精简一点'，没指明具体长度",
+      "candidateOptions": ["short", "medium"]
+    }
+  ],
+  "responseMode": "auto_apply"
+}
+
+=== Intent 字段说明 ===
+
+confidence (推荐，0~1，默认 0.8):
+- 你对自身理解用户意图的信心度
+- 接近 1.0 表示非常确信
+- 低于 0.6 时应考虑 preview 或 clarify
+
+uncertainties (可选):
+- 列出你觉得不确定的部分
+- 每项包含 field（哪个字段）、reason（为什么不确定）、candidateOptions（候选选项）
+- 如果没有不确定的地方，可以省略或设为空数组
+
+responseMode (推荐，默认 "auto_apply"):
+- "auto_apply": 直接应用到文档（适用于高信心、低风险的改动）
+- "preview": 生成预览让用户确认（适用于较大改动或中等信心）
+- "clarify": 暂不改文档，向用户提问澄清（适用于高不确定性、高风险的情况）
+
+=== 选择 responseMode 的原则 ===
+
+- 如果 confidence >= 0.8 且改动范围较小 → auto_apply
+- 如果 confidence >= 0.6 且改动较大（如长段落重写）→ preview
+- 如果 confidence < 0.6 且 uncertainties 涉及关键决策 → clarify
+- 当 clarify 时，[assistant] 块应包含简短问题和 2~3 个选项
+- 如果不确定该用什么模式，默认使用 "auto_apply"
 
 [docops]
 {
@@ -220,9 +290,11 @@ Your short natural-language acknowledgement for the user (1-2 sentences).
 }
 
 Requirements for [docops]:
-- At least one op must exist.
+- At least one op must exist (unless responseMode is "clarify", then docops can be minimal or empty).
 - replace_range payload.paragraphs MUST keep the same paragraph indexes as the input unless expand mode allows more.
-- JSON must be valid and not wrapped in code fences.`;
+- JSON must be valid and NOT wrapped in markdown code fences (no \`\`\`json).
+
+CRITICAL: Output JSON directly as plain text. Do NOT use markdown code blocks like \`\`\`json ... \`\`\`.`;
 }
 
 // ==========================================

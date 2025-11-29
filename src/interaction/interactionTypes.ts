@@ -66,7 +66,17 @@ export type InteractionKind =
   // 版本快照创建
   | 'doc.version_snapshot_created'
   // 🆕 系统创建快照
-  | 'system.snapshot.created';
+  | 'system.snapshot.created'
+
+  // ==========================================
+  // v2: Intent Protocol 相关
+  // ==========================================
+  // AI 生成了 Intent（记录 responseMode / confidence）
+  | 'ai.intent.generated'
+  // UI 展示了澄清问题
+  | 'ai.intent.clarify.shown'
+  // 用户选择了澄清选项
+  | 'ai.intent.clarify.resolved';
 
 // ==========================================
 // 事件元信息类型
@@ -236,6 +246,56 @@ export interface SystemSnapshotMeta {
   relatedActionKind?: string;
 }
 
+// ==========================================
+// v2: Intent Protocol 相关 Meta 类型
+// ==========================================
+
+/**
+ * AI 生成 Intent 的元信息
+ */
+export interface AiIntentGeneratedMeta {
+  /** Intent ID */
+  intentId: string;
+  /** 响应模式 */
+  responseMode: 'auto_apply' | 'preview' | 'clarify';
+  /** 信心度 (0~1) */
+  confidence?: number;
+  /** 不确定性数量 */
+  uncertaintiesCount?: number;
+  /** 章节标题 */
+  sectionTitle?: string;
+}
+
+/**
+ * UI 展示澄清问题的元信息
+ */
+export interface AiIntentClarifyShownMeta {
+  /** Intent ID */
+  intentId: string;
+  /** 不确定的字段 */
+  uncertaintyField: string;
+  /** 候选选项 */
+  candidateOptions?: string[];
+  /** 章节标题 */
+  sectionTitle?: string;
+}
+
+/**
+ * 用户选择澄清选项的元信息
+ */
+export interface AiIntentClarifyResolvedMeta {
+  /** Intent ID */
+  intentId: string;
+  /** 不确定的字段 */
+  uncertaintyField: string;
+  /** 用户选择的选项 */
+  userChoice: string;
+  /** 是否为自定义输入（非候选选项） */
+  isCustomInput?: boolean;
+  /** 章节标题 */
+  sectionTitle?: string;
+}
+
 /**
  * 事件元信息联合类型
  */
@@ -255,6 +315,10 @@ export type InteractionMeta =
   | UserUndoMeta
   | UserHeadingChangedMeta
   | SystemSnapshotMeta
+  // v2 Intent Protocol
+  | AiIntentGeneratedMeta
+  | AiIntentClarifyShownMeta
+  | AiIntentClarifyResolvedMeta
   | Record<string, unknown>;
 
 // ==========================================
@@ -332,6 +396,10 @@ export const INTERACTION_KIND_LABELS: Record<InteractionKind, string> = {
   'ai.section_complex.applied': 'AI 复合操作已应用',
   'ai.key_sentences.marked': 'AI 标记关键句',
   'ai.key_terms.marked': 'AI 标记关键词语',
+  // v2 Intent Protocol
+  'ai.intent.generated': 'AI 生成意图',
+  'ai.intent.clarify.shown': 'AI 发起澄清',
+  'ai.intent.clarify.resolved': '用户完成澄清',
   // 用户操作
   'user.inline_format.applied': '用户格式化文本',
   'user.undo': '用户撤销操作',

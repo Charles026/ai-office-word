@@ -4,6 +4,11 @@
  * Maps abstract editor commands (string IDs) to Lexical specific actions.
  * This serves as the "Command Layer" requested.
  * 
+ * TODO(docops-boundary):
+ * - This entire file represents a boundary violation in the "DocOps Runtime" architecture.
+ * - It manipulates Lexical state directly, bypassing CommandBus -> DocOps -> DocumentEngine.
+ * - Future Goal: UI calls CommandBus -> DocumentEngine updates AST -> Adapter syncs AST to Lexical.
+ * 
  * 【命令分类】
  * - 文本格式：toggleBold, toggleItalic, toggleUnderline
  * - 块类型：setBlockTypeParagraph, setBlockTypeHeading1/2/3
@@ -113,6 +118,7 @@ export const executeEditorCommand = (editor: LexicalEditor, commandId: string, p
   switch (commandId) {
     // Editing
     case 'insertText':
+      // TODO(docops-boundary): Bypasses CommandBus. Should use commandBus.execute('insertText', ...)
       editor.update(() => {
         const selection = $getSelection();
         if ($isRangeSelection(selection)) {

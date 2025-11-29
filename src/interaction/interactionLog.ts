@@ -542,3 +542,74 @@ export function logAiSelectionRewriteApplied(
   });
 }
 
+// ==========================================
+// v2 Intent Protocol 便捷函数
+// ==========================================
+
+/**
+ * 记录 AI 生成 Intent
+ */
+export function logAiIntentGenerated(
+  docId: string,
+  sectionId: string | null,
+  options: {
+    intentId: string;
+    responseMode: 'auto_apply' | 'preview' | 'clarify';
+    confidence?: number;
+    uncertaintiesCount?: number;
+    sectionTitle?: string;
+  }
+): void {
+  interactionLog.log('ai.intent.generated', docId, sectionId, {
+    intentId: options.intentId,
+    responseMode: options.responseMode,
+    confidence: options.confidence,
+    uncertaintiesCount: options.uncertaintiesCount,
+    sectionTitle: options.sectionTitle,
+  });
+}
+
+/**
+ * 记录 UI 展示澄清问题
+ */
+export function logAiIntentClarifyShown(
+  docId: string,
+  sectionId: string | null,
+  options: {
+    intentId: string;
+    uncertaintyField: string;
+    candidateOptions?: string[];
+    sectionTitle?: string;
+  }
+): void {
+  interactionLog.log('ai.intent.clarify.shown', docId, sectionId, {
+    intentId: options.intentId,
+    uncertaintyField: options.uncertaintyField,
+    candidateOptions: options.candidateOptions,
+    sectionTitle: options.sectionTitle,
+  });
+}
+
+/**
+ * 记录用户选择澄清选项
+ */
+export function logAiIntentClarifyResolved(
+  docId: string,
+  sectionId: string | null,
+  options: {
+    intentId: string;
+    uncertaintyField: string;
+    userChoice: string;
+    isCustomInput?: boolean;
+    sectionTitle?: string;
+  }
+): void {
+  interactionLog.log('ai.intent.clarify.resolved', docId, sectionId, {
+    intentId: options.intentId,
+    uncertaintyField: options.uncertaintyField,
+    userChoice: options.userChoice,
+    isCustomInput: options.isCustomInput,
+    sectionTitle: options.sectionTitle,
+  });
+}
+

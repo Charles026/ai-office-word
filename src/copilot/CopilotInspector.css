@@ -408,6 +408,79 @@
 }
 
 /* ==========================================
+   v2: Uncertainties 展示
+   ========================================== */
+
+.inspector-uncertainties {
+  margin: 0 16px 16px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.inspector-uncertainties .inspector-column-header {
+  background: rgba(245, 158, 11, 0.1);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.inspector-uncertainties-list {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.inspector-uncertainty-item {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.inspector-uncertainty-field {
+  color: #fbbf24;
+  margin-bottom: 4px;
+}
+
+.inspector-uncertainty-field strong {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.inspector-uncertainty-reason {
+  color: #d1d5db;
+  margin-bottom: 8px;
+}
+
+.inspector-uncertainty-reason strong {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.inspector-uncertainty-options {
+  color: #9ca3af;
+}
+
+.inspector-uncertainty-options strong {
+  font-weight: 500;
+}
+
+.inspector-option-badge {
+  display: inline-block;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  margin-left: 6px;
+  margin-top: 4px;
+}
+
+/* ==========================================
    Scrollbar
    ========================================== */
 

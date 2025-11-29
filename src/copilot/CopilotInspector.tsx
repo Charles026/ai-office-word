@@ -1,10 +1,11 @@
 /**
- * CopilotInspector - DocContext 调试面板
+ * CopilotInspector - DocContext 调试面板 (v2)
  * 
  * 仅在开发模式下可用，用于查看：
  * - DocContextEnvelope
  * - 发送给 LLM 的 messages
  * - 基础统计信息
+ * - v2 新增：CanonicalIntent 的 confidence / uncertainties / responseMode
  */
 
 import React, { useState, useCallback } from 'react';
@@ -126,8 +127,31 @@ const MessageList: React.FC<{ messages: DebugMessage[]; title: string }> = ({
 const SnapshotMeta: React.FC<{ snapshot: CopilotDebugSnapshot }> = ({ snapshot }) => {
   const envelope = snapshot.envelope;
   const behaviorContext = snapshot.behaviorContext;
+  const canonicalIntent = snapshot.canonicalIntent;
   const estimatedTokens = envelope?.budget.estimatedTokens ?? 0;
   const maxTokens = envelope?.budget.maxTokens ?? 0;
+
+  // 获取 responseMode 显示样式
+  const getResponseModeStyle = (mode?: string) => {
+    switch (mode) {
+      case 'auto_apply': return { color: '#22c55e', label: '✓ Auto Apply' };
+      case 'preview': return { color: '#f59e0b', label: '👁 Preview' };
+      case 'clarify': return { color: '#3b82f6', label: '❓ Clarify' };
+      default: return { color: '#6b7280', label: mode || '-' };
+    }
+  };
+
+  // 获取 confidence 显示样式
+  const getConfidenceStyle = (confidence?: number) => {
+    if (confidence === undefined) return { color: '#6b7280', label: '-' };
+    const pct = Math.round(confidence * 100);
+    if (confidence >= 0.8) return { color: '#22c55e', label: `${pct}% ✓` };
+    if (confidence >= 0.6) return { color: '#f59e0b', label: `${pct}%` };
+    return { color: '#ef4444', label: `${pct}% ⚠` };
+  };
+
+  const responseModeInfo = getResponseModeStyle(canonicalIntent?.responseMode);
+  const confidenceInfo = getConfidenceStyle(canonicalIntent?.confidence);
 
   return (
     <div className="inspector-meta">
@@ -173,6 +197,34 @@ const SnapshotMeta: React.FC<{ snapshot: CopilotDebugSnapshot }> = ({ snapshot }
           </span>
         </div>
       )}
+      
+      {/* 🆕 v2: Intent Protocol 信息 */}
+      {canonicalIntent && (
+        <>
+          <div className="inspector-meta-divider">Intent Protocol (v2)</div>
+          <div className="inspector-meta-row">
+            <span className="inspector-meta-label">Response Mode:</span>
+            <span className="inspector-meta-value" style={{ color: responseModeInfo.color }}>
+              {responseModeInfo.label}
+            </span>
+          </div>
+          <div className="inspector-meta-row">
+            <span className="inspector-meta-label">Confidence:</span>
+            <span className="inspector-meta-value" style={{ color: confidenceInfo.color }}>
+              {confidenceInfo.label}
+            </span>
+          </div>
+          {canonicalIntent.uncertainties && canonicalIntent.uncertainties.length > 0 && (
+            <div className="inspector-meta-row">
+              <span className="inspector-meta-label">Uncertainties:</span>
+              <span className="inspector-meta-value" style={{ color: '#f59e0b' }}>
+                {canonicalIntent.uncertainties.length} 项
+              </span>
+            </div>
+          )}
+        </>
+      )}
+
       {/* BehaviorContext 展示（只显示事实数据） */}
       {behaviorContext && (
         <>
@@ -338,6 +390,36 @@ export const CopilotInspector: React.FC<CopilotInspectorProps> = ({ onClose }) =
                     <JsonViewer data={currentSnapshot.docOpsPlan} />
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* 🆕 v2: Uncertainties 详情展示 */}
+            {currentSnapshot.canonicalIntent?.uncertainties && 
+             currentSnapshot.canonicalIntent.uncertainties.length > 0 && (
+              <div className="inspector-uncertainties">
+                <div className="inspector-column-header">
+                  <span>⚠️ Uncertainties ({currentSnapshot.canonicalIntent.uncertainties.length})</span>
+                </div>
+                <div className="inspector-uncertainties-list">
+                  {currentSnapshot.canonicalIntent.uncertainties.map((uncertainty, idx) => (
+                    <div key={idx} className="inspector-uncertainty-item">
+                      <div className="inspector-uncertainty-field">
+                        <strong>Field:</strong> {uncertainty.field}
+                      </div>
+                      <div className="inspector-uncertainty-reason">
+                        <strong>Reason:</strong> {uncertainty.reason}
+                      </div>
+                      {uncertainty.candidateOptions && uncertainty.candidateOptions.length > 0 && (
+                        <div className="inspector-uncertainty-options">
+                          <strong>Options:</strong>{' '}
+                          {uncertainty.candidateOptions.map((opt, i) => (
+                            <span key={i} className="inspector-option-badge">{opt}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

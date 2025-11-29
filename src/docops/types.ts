@@ -234,6 +234,18 @@ export interface InsertLineBreakOp {
 }
 
 /**
+ * 替换块级节点文本 (AI 改写常用)
+ */
+export interface ReplaceBlockTextOp {
+  type: 'ReplaceBlockText';
+  payload: {
+    nodeId: DocNodeId;
+    text: string;
+  };
+  meta: DocOpMeta;
+}
+
+/**
  * 自定义操作（预留扩展）
  */
 export interface CustomOp {
@@ -260,6 +272,7 @@ export type DocOp =
   | DeleteNodeOp
   | SplitBlockOp
   | InsertLineBreakOp
+  | ReplaceBlockTextOp
   | CustomOp;
 
 /**

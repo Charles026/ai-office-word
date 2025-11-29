@@ -18,7 +18,7 @@
  * - 操作必须是确定性的（相同输入 → 相同输出）
  */
 
-import {
+  import {
   DocOp,
   InsertParagraphOp,
   InsertTextOp,
@@ -31,6 +31,7 @@ import {
   SetHeadingLevelOp,
   SplitBlockOp,
   InsertLineBreakOp,
+  ReplaceBlockTextOp,
 } from '../docops/types';
 
 import {
@@ -199,6 +200,8 @@ export class DocumentEngine {
         return this.handleSplitBlock(ast, op);
       case 'InsertLineBreak':
         return this.handleInsertLineBreak(ast, op);
+      case 'ReplaceBlockText':
+        return this.handleReplaceBlockText(ast, op);
       case 'Custom':
         console.warn('[DocumentEngine] Custom op not implemented:', op.payload.customType);
         return { nextAst: ast, changed: false };
@@ -522,6 +525,23 @@ export class DocumentEngine {
     } else {
       block.children = [createTextRun(newText)];
     }
+
+    return { nextAst: ast, changed: true };
+  }
+
+  /**
+   * 处理替换块文本
+   */
+  private handleReplaceBlockText(ast: DocumentAst, op: ReplaceBlockTextOp): ApplyOpsResult {
+    const { nodeId, text } = op.payload;
+    
+    const block = findBlockById(ast, nodeId);
+    if (!block || !hasInlineChildren(block)) {
+      return { nextAst: ast, changed: false };
+    }
+
+    // 替换内容：清空并插入新文本
+    block.children = [createTextRun(text)];
 
     return { nextAst: ast, changed: true };
   }
