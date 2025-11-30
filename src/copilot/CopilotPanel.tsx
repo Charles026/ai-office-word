@@ -12,6 +12,11 @@
  * 它能感知用户在 Word 里的 GUI 行为，并通过自然语言实现精确的文档操作。
  * 
  * 「自然语言只是入口，真正的权力在 Intent & DocOps，Copilot 是中枢而不是聊天玩具。」
+ * 
+ * 【v3 更新】
+ * - 集成 CopilotRuntime：统一的 Intent 协议层
+ * - 支持 [INTENT] + [REPLY] 结构化输出
+ * - Intent.mode=edit 时可改文档，mode=chat 时纯聊天
  */
 
 import React, { useCallback, useState } from 'react';
@@ -30,7 +35,18 @@ import {
 } from './copilotRuntimeBridge';
 import { undoCopilotAction } from './copilotUndo';
 import { createUserMessage, createAssistantMessage } from './copilotTypes';
+import { useCopilotRuntime } from './useCopilotRuntime';
+import { describeIntent } from './copilotIntentParser';
 import './CopilotPanel.css';
+
+// ==========================================
+// 常量
+// ==========================================
+
+const __DEV__ = typeof process !== 'undefined' && process.env.NODE_ENV === 'development';
+
+/** 是否启用新的 CopilotRuntime（可通过环境变量或 localStorage 控制） */
+const ENABLE_COPILOT_RUNTIME = true;
 
 // ==========================================
 // Props
@@ -61,13 +77,21 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
 
+  // 🆕 使用 CopilotRuntime
+  const { runTurn, isEnabled: isRuntimeEnabled } = useCopilotRuntime({
+    enabled: ENABLE_COPILOT_RUNTIME,
+  });
+
   // 获取当前会话
   const docId = context.docId;
   const sessionKey = docId || '__global__';
   const activeSession = sessions[sessionKey];
   const messages = activeSession?.messages ?? [];
 
-  // 发送消息 - 两级解析架构
+  // 发送消息 - 三级解析架构（v3）
+  // 1. 规则层（高置信度命令）
+  // 2. CopilotRuntime（Intent 协议）
+  // 3. Fallback（原有聊天逻辑）
   const handleSend = useCallback(async (content: string) => {
     if (isLoading) return;
 
@@ -86,19 +110,87 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
       // === 第一级：规则层粗解析 ===
       const ruleResult = resolveCopilotCommandByRules(content, context);
       
-      // 高置信度规则：直接当命令执行
+      // 高置信度规则：直接当命令执行（保持快速路径）
       if (ruleResult && ruleResult.confidence === 'high' && ruleResult.docId) {
         console.log('[CopilotPanel] Rule matched (high confidence):', ruleResult.command);
         await runCopilotCommand(ruleResult, userMessage);
         return;
       }
 
-      // === 第二级：LLM Router（只在有 docId 时调用） ===
+      // === 第二级：CopilotRuntime（新的 Intent 协议） ===
+      if (isRuntimeEnabled && docId) {
+        console.log('[CopilotPanel] Using CopilotRuntime...');
+        
+        const runtimeResult = await runTurn(content);
+        
+        if (runtimeResult) {
+          // 创建助手消息
+          let replyContent = runtimeResult.replyText;
+          
+          // DEV: 添加详细的 Intent 调试信息
+          if (__DEV__) {
+            const debugLines: string[] = [];
+            debugLines.push('------- 🧪 DEBUG INFO -------');
+            
+            if (runtimeResult.intent) {
+              const intentLabel = describeIntent(runtimeResult.intent);
+              const modeLabel = runtimeResult.intent.mode === 'edit' ? '📝 EDIT' : '💬 CHAT';
+              debugLines.push(`Intent: ${modeLabel} → ${intentLabel}`);
+              debugLines.push(`Action: ${runtimeResult.intent.action}`);
+              debugLines.push(`Target: scope=${runtimeResult.intent.target.scope}, sectionId=${runtimeResult.intent.target.sectionId || '(none)'}`);
+              
+              if (runtimeResult.executed) {
+                debugLines.push('✅ DocOps 已执行！文档已被修改。');
+              } else if (runtimeResult.intent.mode === 'edit') {
+                debugLines.push(`⚠️ 编辑未执行: ${runtimeResult.error || '可能缺少 sectionId 或 action 不支持'}`);
+              }
+            } else {
+              debugLines.push('⚠️ 未解析到 Intent（模型可能没有按格式输出）');
+            }
+            
+            if (runtimeResult.error) {
+              debugLines.push(`❌ Error: ${runtimeResult.error}`);
+            }
+            
+            debugLines.push('-----------------------------');
+            
+            // 把调试信息放在回复前面
+            replyContent = debugLines.join('\n') + '\n\n' + replyContent;
+          }
+          
+          const assistantMessage = createAssistantMessage(replyContent, false, {
+            // 记录 Intent 信息用于调试
+            actionType: runtimeResult.intent?.action,
+            status: runtimeResult.executed ? 'applied' : undefined,
+          });
+          appendMessage(docId, assistantMessage);
+          
+          // 如果成功执行了编辑，记录日志
+          if (runtimeResult.executed) {
+            console.log('[CopilotPanel] ✅ Runtime executed edit:', {
+              action: runtimeResult.intent?.action,
+              target: runtimeResult.intent?.target,
+            });
+          } else if (runtimeResult.intent?.mode === 'edit') {
+            console.log('[CopilotPanel] ⚠️ Edit intent not executed:', {
+              action: runtimeResult.intent?.action,
+              target: runtimeResult.intent?.target,
+              error: runtimeResult.error,
+            });
+          }
+          
+          return;
+        }
+        
+        // Runtime 返回 null 表示需要降级
+        console.log('[CopilotPanel] Runtime returned null, falling back...');
+      }
+
+      // === 第三级：LLM Router（旧逻辑，作为降级） ===
       if (context.docId && content.length >= 4) {
         const roughKind = ruleResult?.roughKind ?? getRoughKind(content);
         
-        // 调用 LLM Router
-        console.log('[CopilotPanel] Calling Intent Router...', { roughKind });
+        console.log('[CopilotPanel] Calling Intent Router (fallback)...', { roughKind });
         const routerResult = await routeIntentWithLLM(content, context, roughKind);
         
         if (routerResult.mode === 'command' && routerResult.command) {
@@ -111,16 +203,13 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
       }
 
       // === Fallback：普通聊天（使用 DocContextEnvelope） ===
-      console.log('[CopilotPanel] Fallback to chat');
+      console.log('[CopilotPanel] Fallback to chat (legacy)');
       
       // 创建占位的助手消息
       const assistantMessage = createAssistantMessage('', true);
       appendMessage(docId, assistantMessage);
 
-      // 🆕 智能选择 scope：
-      // - 如果有 sectionId，使用 section scope
-      // - 如果有 docId 但没有 sectionId，使用 document scope（让 LLM 能看到整篇文档）
-      // - 否则使用 none
+      // 智能选择 scope
       let effectiveScope = context.scope;
       if (docId && !context.sectionId && context.scope !== 'document') {
         effectiveScope = 'document';
@@ -139,7 +228,7 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
       });
 
       // DEV: 打印 envelope 信息
-      if (process.env.NODE_ENV === 'development' && response.envelope) {
+      if (__DEV__ && response.envelope) {
         console.log('[CopilotPanel] DocContextEnvelope used:', {
           scope: response.envelope.scope,
           title: response.envelope.global.title,
@@ -167,7 +256,7 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [context, docId, messages, isLoading, appendMessage, updateMessage]);
+  }, [context, docId, messages, isLoading, appendMessage, updateMessage, isRuntimeEnabled, runTurn]);
 
   // 清空会话
   const handleClear = useCallback(() => {

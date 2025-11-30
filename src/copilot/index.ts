@@ -51,3 +51,25 @@ export {
   isCopilotContextListenerInitialized,
 } from './copilotContextListener';
 
+// ==========================================
+// v3 新增：CopilotRuntime & Intent 协议
+// ==========================================
+
+// Runtime 类型
+export * from './copilotRuntimeTypes';
+
+// Runtime 实现
+export { CopilotRuntime, createCopilotRuntime } from './CopilotRuntime';
+export type { CopilotRuntimeDeps, CopilotTurnResult } from './CopilotRuntime';
+
+// Runtime Hook
+export { useCopilotRuntime } from './useCopilotRuntime';
+
+// Intent 解析器
+export {
+  buildCopilotSystemPrompt,
+  parseCopilotModelOutput,
+  isIntentExecutable,
+  describeIntent,
+} from './copilotIntentParser';
+
