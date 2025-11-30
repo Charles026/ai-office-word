@@ -1,6 +1,6 @@
 # Copilot Runtime 设计文档
 
-> 版本：v1.0  
+> 版本：v1.1  
 > 日期：2025-11-30  
 > 作者：AI Office Team
 
@@ -232,6 +232,7 @@ interface TaskPlan {
 
 ## 5. 实现检查清单
 
+### v1.0
 - [x] 定义 CopilotSessionState 类型 (`copilotRuntimeTypes.ts`)
 - [x] 定义 CopilotIntent 协议类型 (`copilotRuntimeTypes.ts`)
 - [x] 实现 buildCopilotSystemPrompt() (`copilotIntentParser.ts`)
@@ -240,8 +241,20 @@ interface TaskPlan {
 - [x] 实现 useCopilotRuntime Hook (`useCopilotRuntime.ts`)
 - [x] 修改 CopilotPanel 使用 Runtime
 - [x] 编写单元测试（类型守约、Intent 解析、Runtime）
+
+### v1.1 (自然语言定位)
+- [x] 扩展 Intent 类型支持 `rewrite_paragraph` action
+- [x] 添加 `ParagraphRef` 类型和相关 guard 函数
+- [x] 更新 System Prompt 包含段落操作说明
+- [x] 实现 `resolveEditTarget()` helper 函数
+- [x] 实现 `inferParagraphRefFromText()` 自然语言推断
+- [x] 段落重写桥接现有 section rewrite (V1 fallback)
+- [x] 编写段落操作测试
+
+### 未来计划
 - [ ] 支持 document 级批处理
 - [ ] 支持连续 refinement
+- [ ] 实现真正的单段落 DocOps
 
 ---
 
@@ -283,24 +296,260 @@ interface TaskPlan {
 
 ---
 
-## 6. 文件清单
+## 6. 自然语言定位能力 (v1.1 新增)
+
+### 6.1 支持的段落引用短语
+
+| 用户表达 | paragraphRef | paragraphIndex |
+|----------|--------------|----------------|
+| "这一段" / "这段" / "当前段" | `current` | - |
+| "上一段" / "前一段" / "上段" | `previous` | - |
+| "下一段" / "后一段" / "下段" | `next` | - |
+| "第一段" / "第 1 段" | `nth` | 1 |
+| "第二段" / "第 2 段" | `nth` | 2 |
+| "第三段" / "第 3 段" | `nth` | 3 |
+| ... | `nth` | N |
+
+### 6.2 新增 Action: `rewrite_paragraph`
+
+```typescript
+interface CopilotIntent {
+  mode: 'edit';
+  action: 'rewrite_paragraph';
+  target: {
+    scope: 'section';
+    sectionId: string | 'current' | 'auto';
+  };
+  params: {
+    paragraphRef: 'current' | 'previous' | 'next' | 'nth';
+    paragraphIndex?: number;  // 仅 nth 时使用，1-based
+  };
+}
+```
+
+### 6.3 Runtime 解析优先级
+
+`resolveEditTarget()` 函数按以下优先级解析编辑目标：
+
+1. **Intent.params** - LLM 显式指定的 `paragraphRef` / `paragraphIndex`
+2. **当前 selection** - 用户光标所在的 block
+3. **从 userText 推断** - 使用正则匹配自然语言
+4. **Fallback 失败** - 返回友好提示
+
+### 6.4 段落重写实现 (V1)
+
+当前 V1 实现使用 **section rewrite 作为 fallback**：
+
+```
+rewrite_paragraph → resolveEditTarget() → kind='paragraph'
+    → executeEditIntent() → runSectionAiAction('rewrite', sectionId)
+```
+
+**限制**：
+- V1 实际上会重写整个章节，而不是只改那一段
+- 未来 V2 将实现真正的单段落替换 DocOps
+
+**TODO(copilot-runtime-paragraph)**：
+- 实现单段落替换 DocOp
+- 在 Prompt 中明确告诉 LLM "只改写第 N 段"
+- 支持跨 section 的段落引用（如"改写文档的第三段"）
+
+### 6.5 已知限制
+
+| 场景 | 当前行为 | 未来计划 |
+|------|----------|----------|
+| 改写当前段落 | 重写整个章节 | 仅替换该段落 |
+| 跨 section 引用 | 不支持 | 支持 "文档第 N 段" |
+| 中文数字超过 20 | 不支持 | 扩展中文数字解析 |
+
+---
+
+## 7. H1/H2/H3 统一章节语义 (v1.2)
+
+### 7.1 背景
+
+之前的 Section AI 只支持 H2/H3 作为章节，H1 会报错「不支持的标题层级」。
+v1.2 扩展了章节语义，让 H1/H2/H3 都能作为 `rewrite_section` / `rewrite_section_intro` 的目标。
+
+### 7.2 章节层级语义
+
+| 层级 | 语义 | 行为 |
+|------|------|------|
+| H1 | 文档根章节 / 文档标题 | 可作为章节操作目标，遇到下一个 H1 才结束 |
+| H2 | 一级章节 | 标准行为，遇到 H1/H2 结束 |
+| H3 | 二级子章节 | 标准行为，遇到 H1/H2/H3 结束 |
+
+### 7.3 H1 的特殊行为
+
+- **ownParagraphs**：H1 之后到第一个 H2 之前的段落（文档导语）
+- **subtreeParagraphs**：包含整个文档子树（所有 H2/H3 内容）
+- **childSections**：包含所有直接下级 H2 的元信息
+- **endIndex**：整个 H1 章节的最后一个节点索引（直到下一个 H1 或文档结尾）
+
+### 7.4 修改的文件
+
+| 文件 | 变更 |
+|------|------|
+| `src/runtime/context/extractSectionContext.ts` | 移除 H1 限制，支持 level=1 |
+| `src/ribbon/ai/AiSectionActions.tsx` | 允许 H1/H2/H3 触发 AI 操作 |
+| `src/editor/contextMenus/HeadingContextMenu.tsx` | H1 也显示右键菜单 |
+| `src/copilot/CopilotHeader.tsx` | 更新错误提示文案 |
+
+---
+
+## 8. 失败模式 & 错误码 (v1.2)
+
+### 8.1 背景
+
+之前 CopilotRuntime 对各种失败场景的处理偏"静默"，用户和开发者难以诊断问题。
+v1.2 引入显式的 `intentStatus` 和 `errorCode` 字段。
+
+### 8.2 IntentStatus 类型
+
+```typescript
+type IntentStatus = 'ok' | 'missing' | 'invalid' | 'unsupported_action';
+```
+
+| 状态 | 含义 | 用户体验 |
+|------|------|----------|
+| `ok` | Intent 解析成功且有效 | 正常流程 |
+| `missing` | 模型未输出 [INTENT] 块 | 当作纯聊天 |
+| `invalid` | Intent JSON 解析失败或字段不完整 | 显示友好提示 |
+| `unsupported_action` | action 类型不支持 | 显示友好提示 |
+
+### 8.3 ErrorCode 类型
+
+```typescript
+type CopilotErrorCode =
+  | 'intent_missing'          // 模型未输出 [INTENT]
+  | 'invalid_intent_json'     // INTENT JSON 解析失败
+  | 'invalid_intent_fields'   // INTENT 缺少必要字段
+  | 'section_not_found'       // sectionId 无效或不存在
+  | 'unresolvable_target'     // 无法解析编辑目标
+  | 'edit_execution_failed'   // runSectionAiAction 执行失败
+  | 'llm_call_failed'         // LLM 调用失败
+  | 'editor_not_ready'        // 编辑器未就绪
+  | 'no_document';            // 无文档打开
+```
+
+### 8.4 错误触发节点
+
+| 节点 | 错误条件 | intentStatus | errorCode |
+|------|----------|--------------|-----------|
+| 初始化检查 | 无文档打开 | invalid | no_document |
+| 初始化检查 | 编辑器未就绪 | invalid | editor_not_ready |
+| LLM 调用 | API 失败 | invalid | llm_call_failed |
+| Intent 解析 | 无 [INTENT] 块 | missing | intent_missing |
+| Intent 解析 | JSON 解析失败 | invalid | invalid_intent_json |
+| 目标解析 | sectionId 无效 | invalid | section_not_found |
+| 目标解析 | 段落无法定位 | invalid | unresolvable_target |
+| 编辑执行 | runSectionAiAction 抛错 | ok | edit_execution_failed |
+
+### 8.5 UI 显示
+
+- **DEV 模式**：在消息气泡中显示完整调试信息（intentStatus, errorCode, 原始 Intent）
+- **生产模式**：对 `section_not_found` / `unresolvable_target` 显示友好提示
+
+### 8.6 Telemetry
+
+所有错误场景在 DEV 模式下打印 `console.warn` 或 `console.error`，包含：
+- 用户输入摘要
+- Intent 解析结果
+- 错误代码和消息
+
+---
+
+## 9. 连续提问与引用规则 (v1.2)
+
+### 9.1 背景
+
+用户在使用 Copilot 时，常常需要基于上一次编辑进行 follow-up 操作，如：
+- "再改短一点" → 使用上次编辑的目标
+- "再正式一点" → 保持上次的 sectionId/paragraphIndex
+
+### 9.2 lastEditContext 机制
+
+```typescript
+interface LastEditContext {
+  sectionId?: string;       // 上次编辑的章节 ID
+  paragraphIndex?: number;  // 上次编辑的段落索引 (1-based)
+  action?: CopilotAction;   // 上次执行的 action
+  timestamp?: number;       // 上次编辑的时间戳
+}
+```
+
+**更新时机**：
+- 仅在 edit intent 成功执行后更新
+- 切换文档时清空
+- 可通过 `clearLastEditContext()` 手动清除
+
+### 9.3 Follow-up 识别
+
+Runtime 通过正则匹配识别 follow-up 请求：
+
+```typescript
+const followUpPatterns = [
+  /再.{0,4}(短|简洁|长|详细|正式|口语|专业|通俗|清晰|精炼)/,
+  /^(继续|接着|然后)/,
+  /^再改/,
+];
+```
+
+**示例**：
+| 用户输入 | 识别结果 | 行为 |
+|----------|----------|------|
+| 再改短一点 | follow-up | 使用 lastEditContext.sectionId |
+| 再正式一点 | follow-up | 使用 lastEditContext.sectionId |
+| 继续 | follow-up | 使用 lastEditContext.sectionId |
+| 帮我改写第二章 | 非 follow-up | 使用 Intent 中的 sectionId |
+
+### 9.4 解析优先级
+
+`resolveEditTarget` 函数的解析优先级：
+
+1. **Intent.params**: LLM 显式指定的 sectionId
+2. **当前 selection**: 用户光标位置
+3. **lastEditContext**: follow-up 请求时使用
+4. **Fallback**: 第一个章节或返回 unresolvable_target
+
+### 9.5 已知限制
+
+| 场景 | 当前行为 | 未来计划 |
+|------|----------|----------|
+| 跨文档 follow-up | 不支持（切换文档清空上下文） | 可能支持 |
+| "上一次的下一段" | 不支持复合引用 | 待设计 |
+| 历史编辑回溯 | 只保留最后一次 | 可扩展为栈 |
+
+---
+
+## 10. 文件清单
 
 ### 新增文件
 
 | 文件 | 职责 |
 |------|------|
-| `src/copilot/copilotRuntimeTypes.ts` | 类型定义：SessionState, Intent, ModelOutput |
+| `src/copilot/copilotRuntimeTypes.ts` | 类型定义：SessionState, Intent, ModelOutput, ParagraphRef, IntentStatus, ErrorCode |
 | `src/copilot/copilotIntentParser.ts` | Prompt 构建 + Intent 解析 |
-| `src/copilot/CopilotRuntime.ts` | Runtime 核心类 |
+| `src/copilot/CopilotRuntime.ts` | Runtime 核心类 + resolveEditTarget + lastEditContext + 错误处理 |
 | `src/copilot/useCopilotRuntime.ts` | React Hook |
 | `src/copilot/__tests__/copilotRuntimeTypes.test.ts` | 类型测试 |
 | `src/copilot/__tests__/copilotIntentParser.test.ts` | 解析器测试 |
-| `src/copilot/__tests__/CopilotRuntime.test.ts` | Runtime 测试 |
+| `src/copilot/__tests__/CopilotRuntime.test.ts` | Runtime 测试（含错误处理测试 v1.2） |
+| `src/copilot/__tests__/CopilotRuntime.paragraph.test.ts` | 段落操作测试 (v1.1) |
+| `src/copilot/__tests__/CopilotRuntime.reference.test.ts` | 自然语言引用解析测试 (v1.1) |
+| `src/copilot/__tests__/CopilotRuntime.followup.test.ts` | 连续提问测试 (v1.2) |
 
 ### 修改文件
 
 | 文件 | 变更 |
 |------|------|
-| `src/copilot/CopilotPanel.tsx` | 集成 CopilotRuntime，三级解析架构 |
+| `src/copilot/CopilotPanel.tsx` | 集成 CopilotRuntime，显示 intentStatus/errorCode，编辑失败提示 |
 | `src/copilot/index.ts` | 导出新模块 |
+| `src/runtime/context/extractSectionContext.ts` | 支持 H1 章节，清理 heading warning (v1.2) |
+| `src/runtime/intents/buildSectionIntent.ts` | 支持 H1 level (v1.2) |
+| `src/runtime/context/sectionScopeHelpers.ts` | H1 支持 chapter scope (v1.2) |
+| `src/ribbon/ai/AiSectionActions.tsx` | 支持 H1/H2/H3 触发 AI 操作 (v1.2) |
+| `src/editor/contextMenus/HeadingContextMenu.tsx` | 支持 H1 右键菜单 (v1.2) |
+| `src/runtime/context/__tests__/extractSectionContext.test.ts` | H1 测试用例 (v1.2) |
+| `src/runtime/intents/__tests__/buildSectionIntent.test.ts` | H1/非法 level 测试 (v1.2) |
 

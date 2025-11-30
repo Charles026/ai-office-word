@@ -55,6 +55,8 @@ const MENU_ITEMS: MenuItem[] = [
 
 /**
  * 获取当前光标所在的 Heading 节点
+ * 
+ * v1.1: 支持 H1/H2/H3 三级标题
  */
 function getCurrentHeadingNode(editor: LexicalEditor): { id: string; level: number } | null {
   let result: { id: string; level: number } | null = null;
@@ -78,8 +80,8 @@ function getCurrentHeadingNode(editor: LexicalEditor): { id: string; level: numb
         const tag = (currentNode as HeadingNode).getTag();
         const level = parseInt(tag.replace('h', ''), 10);
         
-        // 只支持 H2 和 H3
-        if (level === 2 || level === 3) {
+        // v1.1: 支持 H1、H2、H3
+        if (level >= 1 && level <= 3) {
           result = {
             id: currentNode.getKey(),
             level,
@@ -93,7 +95,8 @@ function getCurrentHeadingNode(editor: LexicalEditor): { id: string; level: numb
         const tag = (parent as HeadingNode).getTag();
         const level = parseInt(tag.replace('h', ''), 10);
         
-        if (level === 2 || level === 3) {
+        // v1.1: 支持 H1、H2、H3
+        if (level >= 1 && level <= 3) {
           result = {
             id: parent.getKey(),
             level,
@@ -158,7 +161,7 @@ export const AiSectionActions: React.FC<AiSectionActionsProps> = ({
     const heading = getCurrentHeadingNode(editor);
     
     if (!heading) {
-      onShowMessage?.('请将光标放在 H2 或 H3 标题上');
+      onShowMessage?.('请将光标放在 H1、H2 或 H3 标题上');
       setIsOpen(false);
       return;
     }

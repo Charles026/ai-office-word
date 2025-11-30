@@ -187,6 +187,10 @@ describe('CopilotRuntime', () => {
 
       expect(result.executed).toBe(false);
       expect(result.error).toContain('No document');
+      // v1.1: 验证新的错误状态字段
+      expect(result.intentStatus).toBe('invalid');
+      expect(result.errorCode).toBe('no_document');
+      expect(result.errorMessage).toBeDefined();
     });
 
     it('should return error when editor not ready', async () => {
@@ -195,6 +199,9 @@ describe('CopilotRuntime', () => {
 
       expect(result.executed).toBe(false);
       expect(result.error).toContain('Editor not ready');
+      // v1.1: 验证新的错误状态字段
+      expect(result.intentStatus).toBe('invalid');
+      expect(result.errorCode).toBe('editor_not_ready');
     });
 
     it('should handle LLM failure', async () => {
@@ -207,6 +214,9 @@ describe('CopilotRuntime', () => {
 
       expect(result.executed).toBe(false);
       expect(result.error).toContain('API Error');
+      // v1.1: 验证新的错误状态字段
+      expect(result.intentStatus).toBe('invalid');
+      expect(result.errorCode).toBe('llm_call_failed');
     });
 
     it('should parse edit intent and execute', async () => {
@@ -222,6 +232,9 @@ describe('CopilotRuntime', () => {
       expect(result.intent?.action).toBe('rewrite_section');
       expect(result.executed).toBe(true);
       expect(result.replyText).toContain('重写');
+      // v1.1: 验证 intentStatus
+      expect(result.intentStatus).toBe('ok');
+      expect(result.errorCode).toBeUndefined();
 
       // 验证 runSectionAiAction 被调用
       const { runSectionAiAction } = await import('../../actions/sectionAiActions');
@@ -240,6 +253,8 @@ describe('CopilotRuntime', () => {
       expect(result.intent?.mode).toBe('chat');
       expect(result.executed).toBe(false);
       expect(result.replyText).toContain('产品需求管理');
+      // v1.1: 验证 intentStatus
+      expect(result.intentStatus).toBe('ok');
 
       // 验证 runSectionAiAction 没有被调用
       const { runSectionAiAction } = await import('../../actions/sectionAiActions');
@@ -257,6 +272,9 @@ describe('CopilotRuntime', () => {
       expect(result.intent).toBeUndefined();
       expect(result.executed).toBe(false);
       expect(result.replyText).toContain('普通的回复');
+      // v1.1: 验证 intentStatus 为 missing
+      expect(result.intentStatus).toBe('missing');
+      expect(result.errorCode).toBe('intent_missing');
     });
 
     it('should update lastTask after edit execution', async () => {

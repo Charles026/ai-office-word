@@ -103,7 +103,7 @@ export const CopilotHeader: React.FC<CopilotHeaderProps> = ({
   // 开发模式下的复杂意图测试
   const handleTestDocEdit = async () => {
     if (!context.docId || !context.sectionId) {
-      alert('请先将光标移到某个 H2/H3 标题上，使 Copilot 感知到当前章节');
+      alert('请先将光标移到某个 H1/H2/H3 标题上，使 Copilot 感知到当前章节');
       return;
     }
 

@@ -260,20 +260,141 @@ describe('extractSectionContext', () => {
       }).toThrow(SectionContextError);
     });
 
-    it('H1 标题应该抛出不支持的错误', () => {
+    // v1.1: H1 现在被支持，不再抛出错误
+    // 保留此测试但更改为验证 H1 正常工作
+  });
+
+  // ==========================================
+  // v1.1: H1 支持测试
+  // ==========================================
+  
+  describe('H1 支持 (v1.1)', () => {
+    it('应该正确提取 H1 section', () => {
       let h1Key = '';
       
       setupEditorWithContent(editor, () => {
         const root = $getRoot();
+        
         const h1 = $createHeadingNode('h1');
         h1.append($createTextNode('文档标题'));
         h1Key = h1.getKey();
-        root.append(h1);
+        
+        const p1 = $createParagraphNode();
+        p1.append($createTextNode('这是文档的开头导语。'));
+        
+        const p2 = $createParagraphNode();
+        p2.append($createTextNode('这是第二段。'));
+        
+        root.append(h1, p1, p2);
       });
 
-      expect(() => {
-        extractSectionContext(editor, h1Key);
-      }).toThrow(SectionContextError);
+      const context = extractSectionContext(editor, h1Key);
+
+      expect(context.sectionId).toBe(h1Key);
+      expect(context.titleText).toBe('文档标题');
+      expect(context.level).toBe(1);
+      expect(context.paragraphs).toHaveLength(2);
+      expect(context.startIndex).toBe(0);
+    });
+
+    it('H1 遇到 H2 时应该将 H2 作为子章节', () => {
+      let h1Key = '';
+      
+      setupEditorWithContent(editor, () => {
+        const root = $getRoot();
+        
+        const h1 = $createHeadingNode('h1');
+        h1.append($createTextNode('文档标题'));
+        h1Key = h1.getKey();
+        
+        const p1 = $createParagraphNode();
+        p1.append($createTextNode('导语内容'));
+        
+        const h2 = $createHeadingNode('h2');
+        h2.append($createTextNode('第一章'));
+        
+        const p2 = $createParagraphNode();
+        p2.append($createTextNode('第一章内容'));
+        
+        root.append(h1, p1, h2, p2);
+      });
+
+      const context = extractSectionContext(editor, h1Key);
+
+      // H1 的直属段落 (ownParagraphs) 只包含 H2 之前的段落
+      expect(context.ownParagraphs).toHaveLength(1);
+      expect(context.ownParagraphs[0].text).toBe('导语内容');
+      
+      // H1 会包含 H2 作为子章节，直到遇到下一个 H1 或文档结尾
+      // endIndex 是 3 (最后一个节点 p2 的索引)
+      expect(context.endIndex).toBe(3);
+      
+      // subtreeParagraphs 应该包含整个子树的段落
+      expect(context.subtreeParagraphs.length).toBeGreaterThanOrEqual(1);
+      
+      // childSections 应该包含 H2
+      expect(context.childSections).toHaveLength(1);
+      expect(context.childSections[0].titleText).toBe('第一章');
+    });
+
+    it('H1 包含 H2/H3 子章节时应该正确提取 childSections', () => {
+      let h1Key = '';
+      
+      setupEditorWithContent(editor, () => {
+        const root = $getRoot();
+        
+        const h1 = $createHeadingNode('h1');
+        h1.append($createTextNode('文档标题'));
+        h1Key = h1.getKey();
+        
+        const intro = $createParagraphNode();
+        intro.append($createTextNode('导语'));
+        
+        const h2 = $createHeadingNode('h2');
+        h2.append($createTextNode('第一章'));
+        
+        const p1 = $createParagraphNode();
+        p1.append($createTextNode('第一章内容'));
+        
+        root.append(h1, intro, h2, p1);
+      });
+
+      const context = extractSectionContext(editor, h1Key);
+
+      // H1 的直属段落 (ownParagraphs) 只包含 H2 之前的导语
+      expect(context.ownParagraphs).toHaveLength(1);
+      expect(context.ownParagraphs[0].text).toBe('导语');
+      
+      // H2 是 H1 的子章节
+      expect(context.childSections).toHaveLength(1);
+      expect(context.childSections[0].titleText).toBe('第一章');
+      expect(context.childSections[0].level).toBe(2);
+      
+      // subtreeParagraphs 包含整个子树的段落（包括 H2 子章节下的内容）
+      // subtreeParagraphs 至少包含导语和第一章内容，以及 H2 标题本身作为结构标记
+      expect(context.subtreeParagraphs.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('getSectionFullText 应该为 H1 生成正确的 markdown', () => {
+      let h1Key = '';
+      
+      setupEditorWithContent(editor, () => {
+        const root = $getRoot();
+        
+        const h1 = $createHeadingNode('h1');
+        h1.append($createTextNode('文档标题'));
+        h1Key = h1.getKey();
+        
+        const p1 = $createParagraphNode();
+        p1.append($createTextNode('内容'));
+        
+        root.append(h1, p1);
+      });
+
+      const context = extractSectionContext(editor, h1Key);
+      const text = getSectionFullText(context);
+
+      expect(text).toBe('# 文档标题\n\n内容');
     });
   });
 

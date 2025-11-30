@@ -85,15 +85,39 @@ export type CopilotMode = 'chat' | 'edit';
  * Copilot 支持的动作类型（Phase 1 只支持这几个）
  * 
  * - rewrite_section: 重写章节
+ * - rewrite_paragraph: 重写单个段落 (v1.1 新增)
  * - summarize_section: 总结章节
  * - summarize_document: 总结整篇文档
  * - highlight_terms: 标记关键词（暂未实现）
  */
 export type CopilotAction =
   | 'rewrite_section'
+  | 'rewrite_paragraph'
   | 'summarize_section'
   | 'summarize_document'
   | 'highlight_terms';
+
+/**
+ * 段落引用类型 (v1.1 新增)
+ * 
+ * - 'current': 当前光标所在段落
+ * - 'previous': 上一段
+ * - 'next': 下一段
+ * - 'nth': 第 N 段（配合 paragraphIndex 使用）
+ */
+export type ParagraphRef = 'current' | 'previous' | 'next' | 'nth';
+
+/**
+ * Intent 参数扩展类型 (v1.1 新增)
+ */
+export interface CopilotIntentParams {
+  /** 段落引用方式 */
+  paragraphRef?: ParagraphRef;
+  /** 段落索引（1-based，仅 paragraphRef='nth' 时使用） */
+  paragraphIndex?: number;
+  /** 其他自定义参数 */
+  [key: string]: unknown;
+}
 
 /**
  * Intent 操作目标
@@ -119,12 +143,21 @@ export interface CopilotIntent {
   /** 操作目标 */
   target: CopilotIntentTarget;
   /** 附加参数（可选，用于扩展） */
-  params?: Record<string, unknown>;
+  params?: CopilotIntentParams;
 }
 
 // ==========================================
 // Model Output 类型
 // ==========================================
+
+/**
+ * Intent 解析状态 (v1.1)
+ */
+export type IntentParseStatus = 
+  | 'ok'              // 解析成功
+  | 'missing'         // 没有 [INTENT] 块
+  | 'json_error'      // JSON 解析失败
+  | 'validation_error'; // 字段验证失败
 
 /**
  * Copilot 模型输出
@@ -138,6 +171,13 @@ export interface CopilotModelOutput {
   replyText: string;
   /** 原始模型输出（便于调试） */
   rawText: string;
+  
+  // ========== v1.1 新增 ==========
+  
+  /** Intent 解析状态 */
+  parseStatus?: IntentParseStatus;
+  /** 解析错误详情（仅在解析失败时） */
+  parseError?: string;
 }
 
 // ==========================================
@@ -150,7 +190,17 @@ export interface CopilotModelOutput {
 export function isCopilotAction(value: unknown): value is CopilotAction {
   return (
     typeof value === 'string' &&
-    ['rewrite_section', 'summarize_section', 'summarize_document', 'highlight_terms'].includes(value)
+    ['rewrite_section', 'rewrite_paragraph', 'summarize_section', 'summarize_document', 'highlight_terms'].includes(value)
+  );
+}
+
+/**
+ * 检查是否是有效的 ParagraphRef
+ */
+export function isParagraphRef(value: unknown): value is ParagraphRef {
+  return (
+    typeof value === 'string' &&
+    ['current', 'previous', 'next', 'nth'].includes(value)
   );
 }
 
@@ -172,7 +222,29 @@ export function isCopilotRuntimeScope(value: unknown): value is CopilotRuntimeSc
  * 检查 Intent 是否需要 sectionId
  */
 export function intentRequiresSectionId(action: CopilotAction): boolean {
-  return action === 'rewrite_section' || action === 'summarize_section' || action === 'highlight_terms';
+  return action === 'rewrite_section' || action === 'rewrite_paragraph' || action === 'summarize_section' || action === 'highlight_terms';
+}
+
+/**
+ * 检查 Intent 是否是段落级操作
+ */
+export function isParagraphAction(action: CopilotAction): boolean {
+  return action === 'rewrite_paragraph';
+}
+
+/**
+ * 特殊的 sectionId 值
+ * - 'current': 使用当前聚焦的章节
+ * - 'auto': 由 runtime 自动推断
+ */
+export const SPECIAL_SECTION_IDS = ['current', 'auto'] as const;
+export type SpecialSectionId = typeof SPECIAL_SECTION_IDS[number];
+
+/**
+ * 检查是否是特殊 sectionId
+ */
+export function isSpecialSectionId(value: unknown): value is SpecialSectionId {
+  return typeof value === 'string' && SPECIAL_SECTION_IDS.includes(value as SpecialSectionId);
 }
 
 /**
@@ -199,9 +271,10 @@ export function validateCopilotIntent(intent: unknown): intent is CopilotIntent 
   // target.scope 必须有效
   if (!isCopilotRuntimeScope(target.scope)) return false;
   
-  // 如果 action 需要 sectionId，则必须提供
+  // 如果 action 需要 sectionId，则必须提供（允许特殊值 'current' / 'auto'）
   if (intentRequiresSectionId(obj.action as CopilotAction)) {
     if (target.scope !== 'section') return false;
+    // 允许特殊 sectionId 或非空字符串
     if (typeof target.sectionId !== 'string' || target.sectionId.length === 0) return false;
   }
   

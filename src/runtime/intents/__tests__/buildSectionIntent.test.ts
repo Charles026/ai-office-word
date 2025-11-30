@@ -113,12 +113,26 @@ describe('buildRewriteSectionIntent', () => {
     }).toThrow('sectionId 不能为空');
   });
 
-  it('context.level 不是 2 或 3 时应该抛出错误', () => {
-    const context = createMockSectionContext({ level: 1 as any });
+  // v1.2: H1 现在是合法 level
+  it('H1 级别应该正确记录', () => {
+    const context = createMockSectionContext({ level: 1 });
+    const intent = buildRewriteSectionIntent(context);
 
+    expect(intent.metadata?.sectionLevel).toBe(1);
+  });
+
+  it('context.level 不是 1/2/3 时应该抛出错误', () => {
+    // 测试 level = 0
+    const context0 = createMockSectionContext({ level: 0 as any });
     expect(() => {
-      buildRewriteSectionIntent(context);
-    }).toThrow('level 必须是 2 或 3');
+      buildRewriteSectionIntent(context0);
+    }).toThrow('level 必须是 1/2/3');
+
+    // 测试 level = 4
+    const context4 = createMockSectionContext({ level: 4 as any });
+    expect(() => {
+      buildRewriteSectionIntent(context4);
+    }).toThrow('level 必须是 1/2/3');
   });
 
   it('返回的 Intent 应该不包含 id', () => {

@@ -50,10 +50,13 @@ export function getScopeLabel(scope: SectionScope): string {
 /**
  * 判断当前 section 是否支持 chapter scope
  * 
- * 只有 H2 且有子 section 时才支持 chapter scope
+ * v1.2: H1/H2 且有子 section 时支持 chapter scope
+ * - H1 有子 H2 时支持
+ * - H2 有子 H3 时支持
+ * - H3 一般没有子 section，不支持 chapter scope
  */
 export function supportsChapterScope(context: SectionContext): boolean {
-  return context.level === 2 && context.childSections.length > 0;
+  return (context.level === 1 || context.level === 2) && context.childSections.length > 0;
 }
 
 /**

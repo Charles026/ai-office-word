@@ -109,19 +109,28 @@ function buildCapabilitiesSection(state: CopilotSessionState): string {
 
 你可以执行以下操作：
 
-1. **rewrite_section** - 重写章节
+1. **rewrite_section** - 重写整个章节
    - 改进文字表达、调整语气、优化结构
    - 需要用户指定目标章节
 
-2. **summarize_section** - 总结章节
+2. **rewrite_paragraph** - 重写单个段落 ⭐
+   - 当用户说"改写这一段""上一段""第 N 段"时使用
+   - 需要在 params 中指定 paragraphRef
+   - paragraphRef 可选值：
+     * "current" - 当前光标所在段落（"这一段/这段"）
+     * "previous" - 上一段
+     * "next" - 下一段
+     * "nth" - 第 N 段，同时设置 paragraphIndex
+
+3. **summarize_section** - 总结章节
    - 提取章节要点，生成简洁摘要
    - 需要用户指定目标章节
 
-3. **summarize_document** - 总结整篇文档
+4. **summarize_document** - 总结整篇文档
    - 提取文档核心内容，生成全文摘要
    - 不需要指定章节
 
-4. **highlight_terms** - 标记关键词（暂未实现）
+5. **highlight_terms** - 标记关键词（暂未实现）
    - 识别并标记文档中的关键术语
 
 当用户的请求不涉及文档编辑时，你应该以普通聊天模式回复。`;
@@ -219,20 +228,30 @@ function buildOutputFormatSection(): string {
 1. **每次回复都必须包含 [INTENT] 块**，即使是纯聊天
 2. **每次回复都必须包含 [REPLY] 块**
 3. **JSON 必须是单行有效 JSON**，不要换行
-4. **sectionId 必须使用文档大纲中提供的真实 ID**（如上面显示的 \`[xxx-xxx]\` 格式）
+4. **sectionId 可以是大纲中的真实 ID，也可以是 "current" 表示当前聚焦的章节**
 
 ## mode 选择规则
 
 - **mode="chat"**：用户只是提问、询问信息、不涉及修改文档
 - **mode="edit"**：用户明确表示要「改写」「重写」「润色」「总结」「修改」文档内容
 
-## action 和 sectionId 规则
+## action 和 参数规则
 
-| action | 说明 | sectionId 要求 |
-|--------|------|----------------|
-| rewrite_section | 重写/改写/润色章节 | **必须**提供（从大纲中选择） |
-| summarize_section | 总结章节 | **必须**提供 |
-| summarize_document | 总结整篇文档 | 不需要（scope=document） |
+| action | 说明 | sectionId | params |
+|--------|------|-----------|--------|
+| rewrite_section | 重写整个章节 | 必须提供（大纲ID或"current"） | 无 |
+| rewrite_paragraph | 重写单个段落 | 必须提供（大纲ID或"current"） | paragraphRef, paragraphIndex |
+| summarize_section | 总结章节 | 必须提供 | 无 |
+| summarize_document | 总结文档 | 不需要 | 无 |
+
+## params.paragraphRef 值（用于 rewrite_paragraph）
+
+| 用户表达 | paragraphRef | paragraphIndex |
+|----------|--------------|----------------|
+| "这一段""这段" | "current" | 不需要 |
+| "上一段" | "previous" | 不需要 |
+| "下一段" | "next" | 不需要 |
+| "第三段""第 3 段" | "nth" | 3 |
 
 ## 示例
 
@@ -258,14 +277,36 @@ function buildOutputFormatSection(): string {
 [/REPLY]
 \`\`\`
 
-**用户说："帮我总结一下这篇文档"**
+**用户说："帮我改写这一段"（当前在某个章节内）**
 \`\`\`
 [INTENT]
-{"mode":"chat","action":"summarize_document","target":{"scope":"document"}}
+{"mode":"edit","action":"rewrite_paragraph","target":{"scope":"section","sectionId":"current"},"params":{"paragraphRef":"current"}}
 [/INTENT]
 
 [REPLY]
-这篇文档的核心内容如下：...（这里是总结内容，不修改文档）
+好的，我来帮你改写当前这一段的内容。
+[/REPLY]
+\`\`\`
+
+**用户说："帮我改写上一段"**
+\`\`\`
+[INTENT]
+{"mode":"edit","action":"rewrite_paragraph","target":{"scope":"section","sectionId":"current"},"params":{"paragraphRef":"previous"}}
+[/INTENT]
+
+[REPLY]
+好的，我来帮你改写上一段的内容。
+[/REPLY]
+\`\`\`
+
+**用户说："帮我改写第三段"**
+\`\`\`
+[INTENT]
+{"mode":"edit","action":"rewrite_paragraph","target":{"scope":"section","sectionId":"current"},"params":{"paragraphRef":"nth","paragraphIndex":3}}
+[/INTENT]
+
+[REPLY]
+好的，我来帮你改写第三段的内容。
 [/REPLY]
 \`\`\`
 
@@ -280,7 +321,10 @@ function buildOutputFormatSection(): string {
 [/REPLY]
 \`\`\`
 
-**重要**：当用户说"改写这一段"或"帮我润色当前章节"时，如果上下文中有「当前章节ID」，请使用那个 ID；否则请礼貌地询问用户想要改写哪个章节。`;
+**重要**：
+- 当用户说"改写这一段""这段话"时，使用 **rewrite_paragraph** 并设置 paragraphRef
+- 当用户说"改写这一节""这一小节""整节"时，使用 **rewrite_section**
+- 如果不确定具体位置，可以使用 sectionId="current" 让系统自动定位`;
 }
 
 /**
@@ -332,6 +376,7 @@ export function parseCopilotModelOutput(raw: string): CopilotModelOutput {
     intent: undefined,
     replyText: '',
     rawText: raw,
+    parseStatus: 'missing', // 默认状态，稍后更新
   };
 
   if (!raw || typeof raw !== 'string') {
@@ -339,6 +384,8 @@ export function parseCopilotModelOutput(raw: string): CopilotModelOutput {
       console.warn('[CopilotIntentParser] Empty or invalid raw text');
     }
     result.replyText = '抱歉，我无法理解您的请求。';
+    result.parseStatus = 'missing';
+    result.parseError = 'Empty or invalid raw text';
     return result;
   }
 
@@ -365,6 +412,7 @@ export function parseCopilotModelOutput(raw: string): CopilotModelOutput {
       const parsedIntent = parseCopilotIntentSafe(intentJson);
       if (parsedIntent) {
         result.intent = parsedIntent;
+        result.parseStatus = 'ok';
         if (__DEV__) {
           console.log('[CopilotIntentParser] ✅ Intent parsed successfully:', {
             mode: parsedIntent.mode,
@@ -374,12 +422,18 @@ export function parseCopilotModelOutput(raw: string): CopilotModelOutput {
           });
         }
       } else {
+        // v1.1: 记录验证失败状态
+        result.parseStatus = 'validation_error';
+        result.parseError = 'Intent validation failed: missing required fields (mode/action/target.scope/sectionId)';
         if (__DEV__) {
           console.warn('[CopilotIntentParser] ❌ Intent validation failed:', intentJson);
           console.warn('[CopilotIntentParser] Validation requires: mode (chat|edit), action, target.scope, and sectionId for section actions');
         }
       }
     } catch (parseError) {
+      // v1.1: 记录 JSON 解析失败状态
+      result.parseStatus = 'json_error';
+      result.parseError = `JSON parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`;
       if (__DEV__) {
         console.warn('[CopilotIntentParser] ❌ JSON parse failed:', parseError);
         console.warn('[CopilotIntentParser] Raw JSON string:', intentJsonStr.slice(0, 300));
@@ -387,6 +441,8 @@ export function parseCopilotModelOutput(raw: string): CopilotModelOutput {
       // 解析失败，intent 保持 undefined
     }
   } else {
+    // v1.1: 记录缺失状态
+    result.parseStatus = 'missing';
     if (__DEV__) {
       console.warn('[CopilotIntentParser] ⚠️ No [INTENT] block found in LLM output');
       console.warn('[CopilotIntentParser] Output preview:', raw.slice(0, 300));
@@ -440,7 +496,7 @@ export function isIntentExecutable(intent: CopilotIntent | undefined): boolean {
   if (intent.mode !== 'edit') return false;
   
   // 目前只支持这几个 action
-  const executableActions = ['rewrite_section', 'summarize_section'];
+  const executableActions = ['rewrite_section', 'rewrite_paragraph', 'summarize_section'];
   return executableActions.includes(intent.action);
 }
 
@@ -450,6 +506,7 @@ export function isIntentExecutable(intent: CopilotIntent | undefined): boolean {
 export function describeIntent(intent: CopilotIntent): string {
   const actionLabels: Record<string, string> = {
     'rewrite_section': '重写章节',
+    'rewrite_paragraph': '重写段落',
     'summarize_section': '总结章节',
     'summarize_document': '总结文档',
     'highlight_terms': '标记关键词',
@@ -459,6 +516,18 @@ export function describeIntent(intent: CopilotIntent): string {
   
   if (intent.mode === 'chat') {
     return `聊天（${actionLabel}）`;
+  }
+  
+  // 如果是段落操作，添加段落引用信息
+  if (intent.action === 'rewrite_paragraph' && intent.params?.paragraphRef) {
+    const refLabels: Record<string, string> = {
+      'current': '当前段落',
+      'previous': '上一段',
+      'next': '下一段',
+      'nth': `第 ${intent.params.paragraphIndex || '?'} 段`,
+    };
+    const refLabel = refLabels[intent.params.paragraphRef as string] || '';
+    return refLabel ? `${actionLabel}（${refLabel}）` : actionLabel;
   }
   
   return actionLabel;

@@ -40,6 +40,11 @@ const __DEV__ = process.env.NODE_ENV === 'development';
 /**
  * 校验 SectionContext 基本字段
  * 
+ * v1.2: 支持 H1/H2/H3 三级标题
+ * - level = 1: 文档级导语 / 顶级章节（如文档标题）
+ * - level = 2: 一级章节（H2）
+ * - level = 3: 二级子章节（H3）
+ * 
  * @throws Error 当 context 无效时
  */
 function validateSectionContext(context: SectionContext, functionName: string): void {
@@ -51,9 +56,10 @@ function validateSectionContext(context: SectionContext, functionName: string): 
     throw new Error(`[${functionName}] context.sectionId 不能为空`);
   }
   
-  if (context.level !== 2 && context.level !== 3) {
+  // v1.2: 支持 H1/H2/H3
+  if (context.level < 1 || context.level > 3) {
     throw new Error(
-      `[${functionName}] context.level 必须是 2 或 3，实际值: ${context.level}`
+      `[${functionName}] context.level 必须是 1/2/3，实际值: ${context.level}`
     );
   }
 }

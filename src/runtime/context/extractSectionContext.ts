@@ -2,14 +2,19 @@
  * extractSectionContext - 从 Document AST 中抽取 Section 上下文
  * 
  * 【职责】
- * - 定位指定 sectionId 对应的 H2/H3 标题节点
+ * - 定位指定 sectionId 对应的 H1/H2/H3 标题节点
  * - 提取该 section 下的所有段落内容
  * - 区分 ownParagraphs（直属段落）和 subtreeParagraphs（子树所有段落）
  * - 返回结构化的 SectionContext 供 DocAgentRuntime 使用
  * 
+ * 【章节层级语义】(v1.1)
+ * - H1: 文档根章节（文档标题），包含整篇文档的"导语"
+ * - H2: 一级章节
+ * - H3: 二级子章节
+ * 
  * 【双层结构】
  * - ownParagraphs: 从标题后到第一个子标题之前的段落（导语）
- * - subtreeParagraphs: 整个子树的所有段落（包含子 H3）
+ * - subtreeParagraphs: 整个子树的所有段落（包含子 H2/H3）
  * - childSections: 子 section 的元信息
  * 
  * 【设计原则】
@@ -145,7 +150,7 @@ function extractParagraphInfo(node: LexicalNode): ParagraphInfo {
  * 从 Document AST 中抽取 Section 上下文
  * 
  * @param editor - Lexical 编辑器实例
- * @param sectionId - 目标 section 的节点 ID（必须是 H2 或 H3）
+ * @param sectionId - 目标 section 的节点 ID（支持 H1/H2/H3）
  * @returns SectionContext - 结构化的 section 上下文
  * @throws SectionContextError - 当 sectionId 无效或节点类型不正确时
  */
@@ -191,11 +196,11 @@ export function extractSectionContext(
         return;
       }
 
-      // 2. 获取标题层级
+      // 2. 获取标题层级 (v1.1: 支持 H1/H2/H3)
       const level = getHeadingLevel(titleNode);
-      if (level === null || level === 1) {
+      if (level === null) {
         error = new SectionContextError(
-          `不支持的标题层级: ${titleNode.getTag()}，仅支持 H2 和 H3`,
+          `无法识别的标题层级: ${titleNode.getTag()}，支持 H1/H2/H3`,
           sectionId,
           'INVALID_HEADING_LEVEL'
         );
@@ -237,7 +242,7 @@ export function extractSectionContext(
         const node = blockNodes[i];
         rawBlocks.push(node);
         
-        // 检查是否为子级标题（H3 under H2）
+        // 检查是否为子级标题（H2 under H1, H3 under H2）
         if (isHeadingNode(node)) {
           const nodeLevel = getHeadingLevel(node);
           
@@ -271,7 +276,7 @@ export function extractSectionContext(
             continue;
           }
           
-          // 遇到更低级标题（不应该发生，因为 endIndex 已排除）
+          // 遇到同级或更高级标题（不应该发生，因为 endIndex 已排除）
           if (nodeLevel !== null && nodeLevel <= level) {
             if (__DEV__) {
               console.warn(
@@ -280,6 +285,13 @@ export function extractSectionContext(
             }
             break;
           }
+          
+          // v1.2: 其他子 heading（如 H4/H5/H6 或跳级的标题）
+          // 不参与正文内容收集，也不触发 warning，静默跳过
+          // TODO(copilot-sections): 后续可在这里构建更深层的 childSections 结构
+          const headingInfo = extractParagraphInfo(node);
+          subtreeParagraphs.push(headingInfo);
+          continue;
         }
         
         // 收集内容节点
@@ -297,7 +309,8 @@ export function extractSectionContext(
             ownParagraphs.push(paragraphInfo);
           }
         } else if (__DEV__) {
-          console.warn(
+          // v1.2: 降级为 debug 日志，不使用 warn
+          console.debug(
             `[extractSectionContext] 跳过未知节点类型: ${node.getType()}, key: ${node.getKey()}`
           );
         }
@@ -385,7 +398,13 @@ export function getSectionPlainText(context: SectionContext): string {
  * 获取 section 的完整文本（含标题）
  */
 export function getSectionFullText(context: SectionContext): string {
-  const titlePrefix = context.level === 2 ? '## ' : '### ';
+  // v1.1: 支持 H1/H2/H3
+  const titlePrefixes: Record<number, string> = {
+    1: '# ',
+    2: '## ',
+    3: '### ',
+  };
+  const titlePrefix = titlePrefixes[context.level] || '## ';
   return `${titlePrefix}${context.titleText}\n\n${getSectionPlainText(context)}`;
 }
 

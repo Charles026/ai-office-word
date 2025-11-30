@@ -11,11 +11,15 @@ import {
   CopilotMode,
   CopilotRuntimeScope,
   CopilotSessionState,
+  ParagraphRef,
   createDefaultSessionState,
   isCopilotAction,
   isCopilotMode,
   isCopilotRuntimeScope,
+  isParagraphRef,
+  isParagraphAction,
   intentRequiresSectionId,
+  isSpecialSectionId,
   validateCopilotIntent,
   parseCopilotIntentSafe,
 } from '../copilotRuntimeTypes';
@@ -28,6 +32,7 @@ describe('copilotRuntimeTypes', () => {
   describe('isCopilotAction', () => {
     it('should return true for valid actions', () => {
       expect(isCopilotAction('rewrite_section')).toBe(true);
+      expect(isCopilotAction('rewrite_paragraph')).toBe(true); // v1.1 新增
       expect(isCopilotAction('summarize_section')).toBe(true);
       expect(isCopilotAction('summarize_document')).toBe(true);
       expect(isCopilotAction('highlight_terms')).toBe(true);
@@ -39,6 +44,52 @@ describe('copilotRuntimeTypes', () => {
       expect(isCopilotAction(null)).toBe(false);
       expect(isCopilotAction(undefined)).toBe(false);
       expect(isCopilotAction(123)).toBe(false);
+    });
+  });
+
+  // v1.1 新增：段落引用类型测试
+  describe('isParagraphRef', () => {
+    it('should return true for valid paragraph refs', () => {
+      expect(isParagraphRef('current')).toBe(true);
+      expect(isParagraphRef('previous')).toBe(true);
+      expect(isParagraphRef('next')).toBe(true);
+      expect(isParagraphRef('nth')).toBe(true);
+    });
+
+    it('should return false for invalid paragraph refs', () => {
+      expect(isParagraphRef('invalid')).toBe(false);
+      expect(isParagraphRef('')).toBe(false);
+      expect(isParagraphRef(null)).toBe(false);
+      expect(isParagraphRef(undefined)).toBe(false);
+      expect(isParagraphRef(1)).toBe(false);
+    });
+  });
+
+  // v1.1 新增：段落操作判断
+  describe('isParagraphAction', () => {
+    it('should return true for paragraph-level actions', () => {
+      expect(isParagraphAction('rewrite_paragraph')).toBe(true);
+    });
+
+    it('should return false for section-level actions', () => {
+      expect(isParagraphAction('rewrite_section')).toBe(false);
+      expect(isParagraphAction('summarize_section')).toBe(false);
+      expect(isParagraphAction('summarize_document')).toBe(false);
+    });
+  });
+
+  // v1.1 新增：特殊 sectionId 判断
+  describe('isSpecialSectionId', () => {
+    it('should return true for special section IDs', () => {
+      expect(isSpecialSectionId('current')).toBe(true);
+      expect(isSpecialSectionId('auto')).toBe(true);
+    });
+
+    it('should return false for regular section IDs', () => {
+      expect(isSpecialSectionId('sec-001')).toBe(false);
+      expect(isSpecialSectionId('abc-123')).toBe(false);
+      expect(isSpecialSectionId('')).toBe(false);
+      expect(isSpecialSectionId(null)).toBe(false);
     });
   });
 
@@ -71,6 +122,7 @@ describe('copilotRuntimeTypes', () => {
   describe('intentRequiresSectionId', () => {
     it('should return true for section-level actions', () => {
       expect(intentRequiresSectionId('rewrite_section')).toBe(true);
+      expect(intentRequiresSectionId('rewrite_paragraph')).toBe(true); // v1.1 新增
       expect(intentRequiresSectionId('summarize_section')).toBe(true);
       expect(intentRequiresSectionId('highlight_terms')).toBe(true);
     });
@@ -99,6 +151,37 @@ describe('copilotRuntimeTypes', () => {
         mode: 'edit',
         action: 'rewrite_section',
         target: { scope: 'section', sectionId: 'abc123' },
+      };
+      expect(validateCopilotIntent(intent)).toBe(true);
+    });
+
+    // v1.1 新增：段落级 Intent 验证
+    it('should validate a correct rewrite_paragraph intent', () => {
+      const intent: CopilotIntent = {
+        mode: 'edit',
+        action: 'rewrite_paragraph',
+        target: { scope: 'section', sectionId: 'sec-001' },
+        params: { paragraphRef: 'current' },
+      };
+      expect(validateCopilotIntent(intent)).toBe(true);
+    });
+
+    it('should validate rewrite_paragraph with nth paragraphRef', () => {
+      const intent: CopilotIntent = {
+        mode: 'edit',
+        action: 'rewrite_paragraph',
+        target: { scope: 'section', sectionId: 'sec-001' },
+        params: { paragraphRef: 'nth', paragraphIndex: 3 },
+      };
+      expect(validateCopilotIntent(intent)).toBe(true);
+    });
+
+    it('should validate rewrite_paragraph with special sectionId "current"', () => {
+      const intent: CopilotIntent = {
+        mode: 'edit',
+        action: 'rewrite_paragraph',
+        target: { scope: 'section', sectionId: 'current' },
+        params: { paragraphRef: 'current' },
       };
       expect(validateCopilotIntent(intent)).toBe(true);
     });

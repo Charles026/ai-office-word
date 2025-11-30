@@ -177,12 +177,94 @@ private async executeEditIntent(intent, editor) {
 
 ---
 
+## 2025-11-30 更新：v1.2 - H1 支持 & 错误处理增强
+
+### 新功能：H1/H2/H3 统一章节语义
+
+**背景**：之前 Section AI 只支持 H2/H3，H1 会报错「不支持的标题层级」。
+
+**变更**：
+- H1 现在被视为「文档根章节」，可作为 `rewrite_section` 的目标
+- H1 的 `ownParagraphs` = H2 之前的段落（文档导语）
+- H1 的 `childSections` = 包含所有直接下级 H2
+
+**修改的文件**：
+- `src/runtime/context/extractSectionContext.ts` - 移除 H1 限制
+- `src/ribbon/ai/AiSectionActions.tsx` - 支持 H1 触发
+- `src/editor/contextMenus/HeadingContextMenu.tsx` - H1 也显示右键菜单
+
+### 新功能：显式错误状态 & Telemetry
+
+**背景**：之前失败场景处理偏"静默"，难以诊断问题。
+
+**新增类型**：
+```typescript
+type IntentStatus = 'ok' | 'missing' | 'invalid' | 'unsupported_action';
+type CopilotErrorCode = 'intent_missing' | 'invalid_intent_json' | 'section_not_found' | ...;
+```
+
+**CopilotTurnResult 新字段**：
+- `intentStatus`: Intent 解析状态
+- `errorCode`: 错误代码（用于 Telemetry）
+- `errorMessage`: 用户可见的错误消息
+
+**错误场景覆盖**：
+
+| 场景 | intentStatus | errorCode |
+|------|--------------|-----------|
+| 无文档打开 | invalid | no_document |
+| 编辑器未就绪 | invalid | editor_not_ready |
+| LLM 调用失败 | invalid | llm_call_failed |
+| 无 [INTENT] 块 | missing | intent_missing |
+| sectionId 无效 | invalid | section_not_found |
+| 段落无法定位 | invalid | unresolvable_target |
+| 编辑执行失败 | ok | edit_execution_failed |
+
+**UI 变化**：
+- DEV 模式：显示 `IntentStatus: ✅/⚠️/❌` 和 `ErrorCode`
+- 生产模式：对 `section_not_found` 等显示友好提示
+
+---
+
+## 2025-11-30 更新：v1.3 - 连续提问 & 写入闭环
+
+### 新功能：连续提问 (lastEditContext)
+
+**背景**：用户需要基于上次编辑进行 follow-up 操作。
+
+**实现**：
+- 新增 `LastEditContext` 接口，记录上次编辑的 sectionId / paragraphIndex / action
+- `resolveEditTarget` 在识别到 follow-up 请求时使用 lastEditContext
+- 支持的短语："再改短一点"、"再正式一点"、"继续"等
+
+**测试**：新增 `CopilotRuntime.followup.test.ts`
+
+### 增强：写入闭环
+
+**背景**：确保 edit intent 真正修改文档，失败时明确告知用户。
+
+**变更**：
+- `CopilotPanel` 对编辑失败显示友好提示
+- `intentStatus === 'ok'` + `executed === false` 时显示警告
+- DEV 模式详细日志，生产模式用户友好提示
+
+### 增强：Part B - 清理 heading warning
+
+**变更**：
+- 子 heading (如 H4/H5/H6) 不再触发 warning，静默加入 subtreeParagraphs
+- 其他未知节点类型降级为 `console.debug`（不再 warn）
+
+---
+
 ## 下一步计划
 
 1. **Document 级批处理**：支持「帮我把每个章节都总结一下」
-2. **连续 Refinement**：基于 `lastTask` 支持「再正式一点」
+2. ~~**连续 Refinement**~~：✅ 已完成 (v1.3 lastEditContext)
 3. **更多 Actions**：`highlight_terms`、`expand_section`
 4. **UI 触发优化**：从大纲右键菜单直接调用 CopilotRuntime
+5. ~~**H1 支持**~~：✅ 已完成 (v1.2)
+6. ~~**错误处理增强**~~：✅ 已完成 (v1.2)
+7. ~~**写入闭环**~~：✅ 已完成 (v1.3)
 
 ---
 
@@ -193,4 +275,6 @@ private async executeEditIntent(intent, editor) {
 - 通过 Intent 协议识别用户编辑意图
 - 通过 DocOps 路径安全地修改文档
 - 保持良好的降级体验和可观测性
+- **v1.2**：支持 H1/H2/H3 全语义章节 + 完善的错误状态和 Telemetry
+- **v1.3**：支持连续提问 (lastEditContext) + 写入闭环验证
 

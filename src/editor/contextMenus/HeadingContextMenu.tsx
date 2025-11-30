@@ -2,7 +2,7 @@
  * HeadingContextMenu - 编辑器中标题的右键菜单
  * 
  * 【职责】
- * - 当用户在编辑器中右键点击 H2/H3 标题时显示菜单
+ * - 当用户在编辑器中右键点击 H1/H2/H3 标题时显示菜单
  * - 调用统一的 Section AI 动作
  * 
  * 【设计原则】
@@ -88,8 +88,8 @@ export const HeadingContextMenu: React.FC<HeadingContextMenuProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   const level = getHeadingLevel(editor, headingKey);
 
-  // 如果不是 H2 或 H3，不显示菜单
-  if (level !== 2 && level !== 3) {
+  // v1.1: 支持 H1/H2/H3，其他层级不显示菜单
+  if (level === null || level < 1 || level > 3) {
     return null;
   }
 

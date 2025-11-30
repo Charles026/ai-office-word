@@ -127,10 +127,19 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
           // 创建助手消息
           let replyContent = runtimeResult.replyText;
           
-          // DEV: 添加详细的 Intent 调试信息
+          // DEV: 添加详细的 Intent 调试信息 (v1.1 增强)
           if (__DEV__) {
             const debugLines: string[] = [];
             debugLines.push('------- 🧪 DEBUG INFO -------');
+            
+            // v1.1: 显示 intentStatus 和 errorCode
+            const statusIcon = runtimeResult.intentStatus === 'ok' ? '✅' : 
+                               runtimeResult.intentStatus === 'missing' ? '⚠️' : '❌';
+            debugLines.push(`IntentStatus: ${statusIcon} ${runtimeResult.intentStatus}`);
+            
+            if (runtimeResult.errorCode) {
+              debugLines.push(`ErrorCode: ${runtimeResult.errorCode}`);
+            }
             
             if (runtimeResult.intent) {
               const intentLabel = describeIntent(runtimeResult.intent);
@@ -142,14 +151,14 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
               if (runtimeResult.executed) {
                 debugLines.push('✅ DocOps 已执行！文档已被修改。');
               } else if (runtimeResult.intent.mode === 'edit') {
-                debugLines.push(`⚠️ 编辑未执行: ${runtimeResult.error || '可能缺少 sectionId 或 action 不支持'}`);
+                debugLines.push(`⚠️ 编辑未执行: ${runtimeResult.errorMessage || runtimeResult.error || '可能缺少 sectionId 或 action 不支持'}`);
               }
             } else {
               debugLines.push('⚠️ 未解析到 Intent（模型可能没有按格式输出）');
             }
             
-            if (runtimeResult.error) {
-              debugLines.push(`❌ Error: ${runtimeResult.error}`);
+            if (runtimeResult.errorMessage) {
+              debugLines.push(`❌ ErrorMessage: ${runtimeResult.errorMessage}`);
             }
             
             debugLines.push('-----------------------------');
@@ -158,10 +167,33 @@ export const CopilotPanel: React.FC<CopilotPanelProps> = ({
             replyContent = debugLines.join('\n') + '\n\n' + replyContent;
           }
           
+          // v1.2: 在正常模式下，对特定错误显示友好提示
+          if (!__DEV__ && runtimeResult.errorCode && runtimeResult.errorMessage) {
+            // 对于编辑相关错误，在回复中添加提示
+            if (runtimeResult.errorCode === 'section_not_found' || 
+                runtimeResult.errorCode === 'unresolvable_target') {
+              replyContent = `💡 ${runtimeResult.errorMessage}\n\n${replyContent}`;
+            }
+            // v1.2: 编辑执行失败时，明确告知用户
+            else if (runtimeResult.errorCode === 'edit_execution_failed') {
+              replyContent = `⚠️ 编辑未能完成：${runtimeResult.errorMessage}\n\n${replyContent}`;
+            }
+          }
+          
+          // v1.2: 如果 Intent 是 edit 模式但未执行成功，添加额外提示
+          if (!__DEV__ && runtimeResult.intent?.mode === 'edit' && !runtimeResult.executed) {
+            // 如果没有其他错误信息，添加通用提示
+            if (!runtimeResult.errorCode) {
+              replyContent = `💡 抱歉，这次编辑没有成功。请重新选择章节后再试一次。\n\n${replyContent}`;
+            }
+          }
+          
           const assistantMessage = createAssistantMessage(replyContent, false, {
             // 记录 Intent 信息用于调试
             actionType: runtimeResult.intent?.action,
             status: runtimeResult.executed ? 'applied' : undefined,
+            // v1.1: 记录错误状态
+            errorCode: runtimeResult.errorCode,
           });
           appendMessage(docId, assistantMessage);
           
