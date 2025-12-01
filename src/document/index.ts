@@ -101,3 +101,40 @@ export {
   findSectionContainingBlock,
   getOutlineFromSnapshot,
 } from './structure';
+
+// InlineMark (v1.0)
+export type {
+  TextAnchor,
+  InlineMark,
+  InlineMarkKind,
+  InlineMarkStyle,
+  InlineMarkCreator,
+  InlineMarkState,
+  MarkKeyTermsIntent,
+  LexicalRange,
+} from './inlineMark';
+
+export {
+  createEmptyInlineMarkState,
+  generateInlineMarkId,
+  createInlineMark,
+  createTextAnchor,
+  isValidTextAnchor,
+  isValidInlineMark,
+  getInlineMarkClassName,
+  getInlineMarkDescription,
+  addInlineMarkToState,
+  removeInlineMarkFromState,
+  clearInlineMarksFromState,
+  getMarksForSection,
+  getAllMarks,
+  findPhraseAnchor,
+  createInlineMarkFromPhrase,
+  processMarkKeyTermsIntent,
+  // Lexical integration
+  getSectionTextFromEditor,
+  buildNodeOffsetMap,
+  resolveAnchorToLexicalRange,
+  verifyAnchorContext,
+  getAnchorText,
+} from './inlineMark';

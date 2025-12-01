@@ -32,7 +32,18 @@ import {
   SplitBlockOp,
   InsertLineBreakOp,
   ReplaceBlockTextOp,
+  ApplyInlineMarkOp,
+  RemoveInlineMarkOp,
+  ClearInlineMarksOp,
 } from '../docops/types';
+
+import {
+  InlineMarkState,
+  createEmptyInlineMarkState,
+  addInlineMarkToState,
+  removeInlineMarkFromState,
+  clearInlineMarksFromState,
+} from './inlineMark';
 
 import {
   DocumentAst,
@@ -58,6 +69,8 @@ export interface ApplyOpsResult {
   nextAst: DocumentAst;
   changed: boolean;
   inverseOps?: DocOp[];
+  /** 更新后的内联标记状态（仅当操作涉及 InlineMark 时返回） */
+  nextInlineMarks?: InlineMarkState;
 }
 
 // ==========================================
@@ -139,13 +152,29 @@ export class HistoryManager {
 
 export class DocumentEngine {
   private history: HistoryManager;
+  private inlineMarks: InlineMarkState;
 
   constructor() {
     this.history = new HistoryManager();
+    this.inlineMarks = createEmptyInlineMarkState();
   }
 
   createEmptyDocument(): DocumentAst {
     return createEmptyDocument();
+  }
+
+  /**
+   * 获取当前内联标记状态
+   */
+  getInlineMarks(): InlineMarkState {
+    return this.inlineMarks;
+  }
+
+  /**
+   * 设置内联标记状态（用于恢复/初始化）
+   */
+  setInlineMarks(state: InlineMarkState): void {
+    this.inlineMarks = state;
   }
 
   applyOp(ast: DocumentAst, op: DocOp): ApplyOpsResult {
@@ -161,12 +190,17 @@ export class DocumentEngine {
 
     let nextAst: DocumentAst = JSON.parse(JSON.stringify(ast));
     let changed = false;
+    let inlineMarksChanged = false;
 
     for (const op of ops) {
       const result = this.applySingleOp(nextAst, op);
       if (result.changed) {
         nextAst = result.nextAst;
         changed = true;
+      }
+      if (result.nextInlineMarks) {
+        this.inlineMarks = result.nextInlineMarks;
+        inlineMarksChanged = true;
       }
     }
 
@@ -175,7 +209,11 @@ export class DocumentEngine {
       nextAst.metadata.modifiedAt = Date.now();
     }
 
-    return { nextAst, changed };
+    const result: ApplyOpsResult = { nextAst, changed };
+    if (inlineMarksChanged) {
+      result.nextInlineMarks = this.inlineMarks;
+    }
+    return result;
   }
 
   private applySingleOp(ast: DocumentAst, op: DocOp): ApplyOpsResult {
@@ -204,6 +242,12 @@ export class DocumentEngine {
         return this.handleInsertLineBreak(ast, op);
       case 'ReplaceBlockText':
         return this.handleReplaceBlockText(ast, op);
+      case 'ApplyInlineMark':
+        return this.handleApplyInlineMark(ast, op);
+      case 'RemoveInlineMark':
+        return this.handleRemoveInlineMark(ast, op);
+      case 'ClearInlineMarks':
+        return this.handleClearInlineMarks(ast, op);
       case 'Custom':
         console.warn('[DocumentEngine] Custom op not implemented:', op.payload.customType);
         return { nextAst: ast, changed: false };
@@ -665,6 +709,80 @@ export class DocumentEngine {
     block.children = [createTextRun(text)];
 
     return { nextAst: ast, changed: true };
+  }
+
+  // ==========================================
+  // InlineMark 操作处理器
+  // ==========================================
+
+  /**
+   * 处理应用内联标记
+   * 
+   * 将 InlineMark 添加到内部状态中。
+   * 不修改 AST，只更新 inlineMarks 状态。
+   */
+  private handleApplyInlineMark(_ast: DocumentAst, op: ApplyInlineMarkOp): ApplyOpsResult {
+    const { mark } = op.payload;
+    
+    // 验证标记有效性
+    if (!mark.id || !mark.anchor || !mark.anchor.sectionId) {
+      console.warn('[DocumentEngine] Invalid InlineMark:', mark);
+      return { nextAst: _ast, changed: false };
+    }
+    
+    // 添加到状态
+    const nextInlineMarks = addInlineMarkToState(this.inlineMarks, mark);
+    
+    console.log(`[DocumentEngine] Applied InlineMark: ${mark.id} (${mark.kind})`);
+    
+    // AST 不变，但标记状态变化
+    return { 
+      nextAst: _ast, 
+      changed: true,
+      nextInlineMarks,
+    };
+  }
+
+  /**
+   * 处理移除内联标记
+   */
+  private handleRemoveInlineMark(_ast: DocumentAst, op: RemoveInlineMarkOp): ApplyOpsResult {
+    const { markId } = op.payload;
+    
+    // 检查标记是否存在
+    if (!this.inlineMarks.marksById[markId]) {
+      console.warn('[DocumentEngine] InlineMark not found:', markId);
+      return { nextAst: _ast, changed: false };
+    }
+    
+    // 从状态中移除
+    const nextInlineMarks = removeInlineMarkFromState(this.inlineMarks, markId);
+    
+    console.log(`[DocumentEngine] Removed InlineMark: ${markId}`);
+    
+    return { 
+      nextAst: _ast, 
+      changed: true,
+      nextInlineMarks,
+    };
+  }
+
+  /**
+   * 处理清除内联标记
+   */
+  private handleClearInlineMarks(_ast: DocumentAst, op: ClearInlineMarksOp): ApplyOpsResult {
+    const { scope } = op.payload;
+    
+    // 清除指定范围的标记
+    const nextInlineMarks = clearInlineMarksFromState(this.inlineMarks, scope);
+    
+    console.log(`[DocumentEngine] Cleared InlineMarks with scope:`, scope);
+    
+    return { 
+      nextAst: _ast, 
+      changed: true,
+      nextInlineMarks,
+    };
   }
 
   // ==========================================

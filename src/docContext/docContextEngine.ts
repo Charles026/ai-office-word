@@ -29,6 +29,10 @@ import {
   DocStats,
   DocMeta,
   ChapterInfo,
+  // v2: 结构识别追踪类型
+  Confidence,
+  DocTitleSource,
+  TitleCandidate,
 } from './docContextTypes';
 import { extractSectionContext, getSectionFullText } from '../runtime/context';
 import { generateOutlineFromEditor } from '../outline/outlineUtils';
@@ -383,7 +387,7 @@ function buildOutlineFromSkeleton(skeleton: DocSkeleton): OutlineEntry[] {
 }
 
 // ==========================================
-// structure-stats-sot v1.5: 结构与统计真相构建
+// structure-stats-sot v1.5 + v2: 结构与统计真相构建
 // ==========================================
 
 /**
@@ -393,12 +397,14 @@ function buildOutlineFromSkeleton(skeleton: DocSkeleton): OutlineEntry[] {
  * LLM 禁止自行推断这些信息。
  * 
  * @tag structure-stats-sot
+ * @tag structure-v2 - 新增置信度追踪和标题候选
  */
 function buildStructureStatsAndMeta(
   skeleton: DocSkeleton | undefined,
   documentFullText: string,
   documentTokenEstimate: number,
-  totalCharCount: number
+  totalCharCount: number,
+  filename?: string | null
 ): {
   structure: DocStructure | undefined;
   stats: DocStats;
@@ -420,16 +426,21 @@ function buildStructureStatsAndMeta(
       docMeta: {
         title: null,
         hasExplicitTitle: false,
+        titleSource: 'none',
+        titleConfidence: 'low',
+        candidates: [],
       },
     };
   }
   
-  // 3. 构建 structure
+  // 3. 构建 structure（包含 v2 字段）
   const flatSections = flattenDocSkeleton(skeleton);
   const chapters: ChapterInfo[] = [];
   const allSections: ChapterInfo[] = [];
   
   for (const section of flatSections) {
+    // 需要从原始 skeleton 获取 source/confidence 等 v2 字段
+    // 由于 DocSectionSkeleton 可能不直接包含这些字段，我们需要从 meta 推断
     const info: ChapterInfo = {
       id: section.id,
       level: section.level,
@@ -439,6 +450,11 @@ function buildStructureStatsAndMeta(
       childCount: section.children.length,
       paragraphCount: section.paragraphCount,
       role: section.role,
+      // v2 字段（从 skeleton 获取，如果有的话）
+      source: (section as any).source,
+      confidence: (section as any).confidence,
+      headingLevel: (section as any).headingLevel,
+      styleScore: (section as any).styleScore,
     };
     
     allSections.push(info);
@@ -449,44 +465,162 @@ function buildStructureStatsAndMeta(
     }
   }
   
+  // 计算全局置信度
+  const globalConfidence = computeStructureGlobalConfidence(allSections);
+  
   const structure: DocStructure = {
     chapters,
     allSections,
     chapterCount: chapters.length,
     totalSectionCount: allSections.length,
+    // v2 字段
+    globalConfidence,
+    baseBodyFontSize: (skeleton.meta as any).baseBodyFontSize,
   };
   
-  // 4. 构建 docMeta
-  // 优先级：文件名 > docTitle（如果有特殊标记）> 第一个 H1
-  let docTitle: string | null = null;
-  let hasExplicitTitle = false;
-  
-  // 检查是否有 doc_title 角色的段落
-  // 目前简化为使用第一个 chapter 的标题
-  if (skeleton.sections.length > 0) {
-    docTitle = skeleton.sections[0].title;
-    // 如果顶层只有一个 section 且它是 chapter，可能是文档标题
-    hasExplicitTitle = skeleton.sections.length === 1 && 
-                        skeleton.sections[0].role === 'chapter';
-  }
-  
-  const docMeta: DocMeta = {
-    title: docTitle,
-    hasExplicitTitle,
-  };
+  // 4. 构建 docMeta（v2: 使用候选机制）
+  const { docMeta } = buildDocMetaWithCandidates(skeleton, filename, allSections);
   
   if (__DEV__) {
-    console.debug('[DocContextEngine] structure-stats-sot built:', {
+    console.debug('[DocContextEngine] structure-stats-sot v2 built:', {
       chapterCount: structure.chapterCount,
       totalSectionCount: structure.totalSectionCount,
+      globalConfidence: structure.globalConfidence,
       charCount: stats.charCount,
       wordCount: stats.wordCount,
       docTitle: docMeta.title,
-      hasExplicitTitle: docMeta.hasExplicitTitle,
+      titleSource: docMeta.titleSource,
+      titleConfidence: docMeta.titleConfidence,
+      candidateCount: docMeta.candidates?.length,
     });
   }
   
   return { structure, stats, docMeta };
+}
+
+/**
+ * 计算结构全局置信度
+ * 
+ * @tag structure-v2
+ */
+function computeStructureGlobalConfidence(allSections: ChapterInfo[]): Confidence {
+  if (allSections.length === 0) {
+    return 'low';
+  }
+  
+  let highCount = 0;
+  let lowCount = 0;
+  
+  for (const section of allSections) {
+    const conf = section.confidence || 'medium';
+    if (conf === 'high') highCount++;
+    else if (conf === 'low') lowCount++;
+  }
+  
+  const total = allSections.length;
+  const highRatio = highCount / total;
+  const lowRatio = lowCount / total;
+  
+  if (highRatio >= 0.7 && lowRatio < 0.1) return 'high';
+  if (lowRatio >= 0.5) return 'low';
+  return 'medium';
+}
+
+/**
+ * 构建 DocMeta（使用候选机制）
+ * 
+ * @tag structure-v2
+ */
+function buildDocMetaWithCandidates(
+  skeleton: DocSkeleton,
+  filename: string | null | undefined,
+  allSections: ChapterInfo[]
+): { docMeta: DocMeta } {
+  const candidates: TitleCandidate[] = [];
+  
+  // 1. 从 skeleton 第一个 chapter 获取候选
+  if (skeleton.sections.length > 0) {
+    const firstSection = skeleton.sections[0];
+    const confidence: Confidence = (firstSection as any).confidence || 'medium';
+    const source: DocTitleSource = (firstSection as any).source === 'heading' ? 'heading' : 'style_inferred';
+    
+    candidates.push({
+      text: firstSection.title,
+      source,
+      confidence,
+      positionIndex: firstSection.startBlockIndex,
+      reasons: [
+        `文档第一个${source === 'heading' ? '标题节点' : '样式推断的标题'}`,
+        `层级 ${firstSection.level}`,
+        `角色 ${firstSection.role}`,
+      ],
+      score: confidence === 'high' ? 10 : confidence === 'medium' ? 6 : 3,
+    });
+  }
+  
+  // 2. 从高置信度的 level=1 章节获取候选
+  for (const section of allSections) {
+    if (section.level === 1 && section.confidence === 'high' && section.source === 'heading') {
+      // 避免重复添加
+      if (candidates.some(c => c.text === section.titleText)) continue;
+      
+      candidates.push({
+        text: section.titleText,
+        source: 'heading',
+        confidence: 'high',
+        positionIndex: section.startIndex,
+        reasons: [
+          'H1 标题节点',
+          '高置信度',
+        ],
+        score: 9,
+      });
+    }
+  }
+  
+  // 3. 从文件名获取候选
+  if (filename) {
+    // 移除扩展名
+    const nameWithoutExt = filename.replace(/\.[^.]+$/, '');
+    if (nameWithoutExt && nameWithoutExt.length > 0) {
+      candidates.push({
+        text: nameWithoutExt,
+        source: 'filename',
+        confidence: 'low',
+        positionIndex: -1,
+        reasons: ['从文件名推断'],
+        score: 2,
+      });
+    }
+  }
+  
+  // 4. 按得分排序，选择最佳候选
+  candidates.sort((a, b) => (b.score || 0) - (a.score || 0));
+  
+  let title: string | null = null;
+  let titleSource: DocTitleSource = 'none';
+  let titleConfidence: Confidence = 'low';
+  let hasExplicitTitle = false;
+  
+  if (candidates.length > 0) {
+    const best = candidates[0];
+    title = best.text;
+    titleSource = best.source;
+    titleConfidence = best.confidence;
+    hasExplicitTitle = best.source === 'explicit_meta' || 
+                       (best.source === 'heading' && best.confidence === 'high');
+  }
+  
+  return {
+    docMeta: {
+      title,
+      hasExplicitTitle,
+      titleSource,
+      titleConfidence,
+      candidates,
+      filename,
+    },
+  };
 }
 
 /**

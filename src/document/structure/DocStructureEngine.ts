@@ -17,13 +17,15 @@
  * - 支持 DocumentAst 作为输入（备用）
  * - 确定性算法，不依赖 AI
  * 
- * @version 1.0.0
+ * @version 2.0.0 - 新增样式推断和置信度追踪
+ * @tag structure-v2
  */
 
-import { LexicalEditor, $getRoot, LexicalNode } from 'lexical';
+import { LexicalEditor, $getRoot, LexicalNode, $isTextNode, $isElementNode } from 'lexical';
 import { $isHeadingNode, HeadingNode } from '@lexical/rich-text';
 import type { DocumentAst, BlockNode } from '../types';
 import { getBlockText, isHeading as isAstHeading } from '../types';
+import type { Confidence, ChapterSource } from '../../docContext/docContextTypes';
 
 // ==========================================
 // 常量
@@ -38,6 +40,17 @@ const DEFAULT_BODY_FONT_SIZE = 12;
 /** 文档主标题的最小字号优势（比正文大多少才算主标题） */
 const DOC_TITLE_FONT_SIZE_ADVANTAGE = 4;
 
+/** 样式推断的置信度阈值 */
+const STYLE_SCORE_HIGH_THRESHOLD = 6;
+const STYLE_SCORE_MEDIUM_THRESHOLD = 4;
+
+/** 首屏段落数（用于判断是否在"首屏"） */
+const FIRST_SCREEN_PARAGRAPH_COUNT = 5;
+
+/** 合理的标题长度范围（字符数） */
+const TITLE_LENGTH_MIN = 2;
+const TITLE_LENGTH_MAX = 80;
+
 // ==========================================
 // 核心类型定义
 // ==========================================
@@ -46,6 +59,8 @@ const DOC_TITLE_FONT_SIZE_ADVANTAGE = 4;
  * 逻辑章节节点
  * 
  * 表示文档中的一个章节（H1/H2/H3）
+ * 
+ * @tag structure-v2 - 新增 source/confidence/headingLevel/styleScore
  */
 export interface SectionNode {
   /** 内部 sectionId（通常复用 block 的 key/id） */
@@ -67,6 +82,20 @@ export interface SectionNode {
   
   /** 子章节 */
   children: SectionNode[];
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /** 章节来源：'heading' | 'style_inferred' | 'mixed' */
+  source?: ChapterSource;
+  
+  /** 识别置信度 */
+  confidence?: Confidence;
+  
+  /** 原始 Heading 层级（h1-h6），如果是 style_inferred 则为 null */
+  headingLevel?: number | null;
+  
+  /** 样式综合得分 */
+  styleScore?: number | null;
 }
 
 /**
@@ -99,6 +128,8 @@ export interface DocStructureSnapshot {
 
 /**
  * 文档结构元信息
+ * 
+ * @tag structure-v2 - 新增 baseBodyFontSize/globalConfidence
  */
 export interface DocStructureMeta {
   /** 总 block 数 */
@@ -111,6 +142,13 @@ export interface DocStructureMeta {
   generatedAt: number;
   /** 引擎版本 */
   engineVersion: string;
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /** 基准正文字号（中位数） */
+  baseBodyFontSize?: number | null;
+  /** 全局置信度 */
+  globalConfidence?: Confidence;
 }
 
 /**
@@ -143,6 +181,8 @@ export type SectionRole =
  * 章节骨架节点
  * 
  * 专为 LLM 设计的章节表示，包含人类友好的显示索引和语义角色
+ * 
+ * @tag structure-v2 - 新增 source/confidence/headingLevel/styleScore
  */
 export interface DocSectionSkeleton {
   /** 章节 ID（对应 SectionNode.id） */
@@ -165,12 +205,25 @@ export interface DocSectionSkeleton {
   endBlockIndex: number;
   /** 直属段落数（不含子章节的段落） */
   paragraphCount: number;
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /** 章节来源 */
+  source?: ChapterSource;
+  /** 识别置信度 */
+  confidence?: Confidence;
+  /** 原始 Heading 层级 */
+  headingLevel?: number | null;
+  /** 样式得分 */
+  styleScore?: number | null;
 }
 
 /**
  * 文档骨架元信息
  * 
  * 已经计算好的统计信息，LLM 可以直接引用
+ * 
+ * @tag structure-v2 - 新增 globalConfidence/baseBodyFontSize
  */
 export interface DocSkeletonMeta {
   /** 章（chapter）的数量 */
@@ -187,6 +240,13 @@ export interface DocSkeletonMeta {
   totalSections: number;
   /** 总段落数 */
   totalParagraphs: number;
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /** 全局置信度 */
+  globalConfidence?: Confidence;
+  /** 基准正文字号 */
+  baseBodyFontSize?: number | null;
 }
 
 /**
@@ -210,6 +270,8 @@ export interface DocSkeleton {
  * Block 特征（内部使用）
  * 
  * 用于分析每个 block 是否为标题
+ * 
+ * @tag structure-v2 - 扩展了更多样式特征
  */
 interface BlockFeatures {
   /** block 实例（Lexical 或 AST） */
@@ -224,26 +286,50 @@ interface BlockFeatures {
   /** 从样式推断的标题层级（如果有） */
   headingLevelFromStyle?: number;
   
-  /** 字号（从 style 推导，或默认值） */
-  fontSize: number;
+  // ========== v2: 样式特征 ==========
+  
+  /** 字号（从 style 推导，或 null 表示无法提取） */
+  fontSize: number | null;
   /** 是否加粗 */
   isBold: boolean;
+  /** 是否斜体 */
+  isItalic: boolean;
+  /** 文本对齐方式 */
+  textAlign: 'left' | 'center' | 'right' | 'justify' | null;
+  /** 段落上边距（粗略值） */
+  marginTop: number | null;
+  /** 段落下边距（粗略值） */
+  marginBottom: number | null;
+  
+  // ========== 文本特征 ==========
   
   /** 纯文本内容 */
   text: string;
-  /** 文本长度 */
+  /** 文本长度（字符数） */
   textLength: number;
   /** 是否为单行短文本 */
   isSingleLine: boolean;
+  /** 行内字符数（不含换行） */
+  lineLength: number;
   /** 是否以编号开头（如 "1.", "第一章"） */
   startsWithNumbering: boolean;
+  /** 是否匹配章节编号模式 */
+  hasSectionNumberPrefix: boolean;
   
+  // ========== 位置特征 ==========
+  
+  /** 段落序号 */
+  positionIndex: number;
   /** 是否在文档顶部附近（index <= 2） */
   isNearTop: boolean;
+  /** 是否在首屏内（index < FIRST_SCREEN_PARAGRAPH_COUNT） */
+  isInFirstScreen: boolean;
 }
 
 /**
  * 标题候选项（内部使用）
+ * 
+ * @tag structure-v2 - 新增 source/confidence/styleScore
  */
 interface HeadingCandidate {
   /** block 实例 */
@@ -256,8 +342,19 @@ interface HeadingCandidate {
   level: 1 | 2 | 3;
   /** 原始特征 */
   features: BlockFeatures;
-  /** 标题得分 */
+  /** 标题得分（综合得分） */
   headingScore: number;
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /** 章节来源 */
+  source: ChapterSource;
+  /** 识别置信度 */
+  confidence: Confidence;
+  /** 样式得分（仅样式贡献的部分） */
+  styleScore: number;
+  /** 原始 Heading 层级 */
+  headingLevel: number | null;
 }
 
 // ==========================================
@@ -358,6 +455,8 @@ interface UnifiedBlock {
 
 /**
  * 内部构建函数
+ * 
+ * @tag structure-v2 - 重构为使用新的评分系统和置信度追踪
  */
 function buildDocStructureInternal(
   blocks: UnifiedBlock[],
@@ -381,17 +480,22 @@ function buildDocStructureInternal(
   }
   
   // 3. 计算 headingScore，找出候选标题
-  const scoredFeatures = features.map(f => ({
-    ...f,
-    headingScore: computeHeadingScore(f, bodyFontSize),
-  }));
+  const scoredFeatures = features.map(f => {
+    const scoreResult = computeHeadingScore(f, bodyFontSize);
+    return {
+      ...f,
+      scoreResult,
+    };
+  });
   
-  const headingCandidatesRaw = scoredFeatures.filter(f => f.headingScore >= HEADING_THRESHOLD);
+  const headingCandidatesRaw = scoredFeatures.filter(
+    f => f.scoreResult.totalScore >= HEADING_THRESHOLD
+  );
   
   if (debug) {
     console.log('[DocStructureEngine] Heading candidates:', headingCandidatesRaw.length);
     headingCandidatesRaw.forEach(h => {
-      console.log(`  - [${h.index}] "${h.text.slice(0, 30)}" score=${h.headingScore}`);
+      console.log(`  - [${h.index}] "${h.text.slice(0, 30)}" total=${h.scoreResult.totalScore} style=${h.scoreResult.styleScore} src=${h.scoreResult.source}`);
     });
   }
   
@@ -402,9 +506,18 @@ function buildDocStructureInternal(
       block: f.block,
       id: f.id,
       index: f.index,
-      level: assignLogicalLevel(f, bodyFontSize),
+      level: assignLogicalLevel({
+        features: f,
+        scoreResult: f.scoreResult,
+        bodyFontSize,
+      }),
       features: f,
-      headingScore: f.headingScore,
+      headingScore: f.scoreResult.totalScore,
+      // v2 新增字段
+      source: f.scoreResult.source,
+      confidence: f.scoreResult.confidence,
+      styleScore: f.scoreResult.styleScore,
+      headingLevel: f.headingLevelFromStyle ?? null,
     }));
   
   // 5. 构造 Section 树
@@ -430,12 +543,18 @@ function buildDocStructureInternal(
   
   const totalSections = countTotalSections(sections);
   
+  // v2: 计算全局置信度
+  const globalConfidence = computeGlobalConfidence(sections);
+  
   const meta: DocStructureMeta = {
     totalBlocks: blocks.length,
     totalSections,
     docTitleBlockId,
     generatedAt: Date.now(),
-    engineVersion: '1.0.0',
+    engineVersion: '2.0.0',
+    // v2 新增字段
+    baseBodyFontSize: bodyFontSize,
+    globalConfidence,
   };
   
   if (debug) {
@@ -443,6 +562,8 @@ function buildDocStructureInternal(
       totalBlocks: meta.totalBlocks,
       totalSections: meta.totalSections,
       hasDocTitle: !!docTitleBlockId,
+      baseBodyFontSize: bodyFontSize,
+      globalConfidence,
     });
   }
   
@@ -453,12 +574,131 @@ function buildDocStructureInternal(
   };
 }
 
+/**
+ * 计算全局置信度
+ * 
+ * 基于所有章节的置信度分布计算文档整体的结构可靠性
+ * 
+ * @tag structure-v2
+ */
+function computeGlobalConfidence(sections: SectionNode[]): Confidence {
+  const allSections = flattenSections(sections);
+  
+  if (allSections.length === 0) {
+    return 'low';
+  }
+  
+  let highCount = 0;
+  let mediumCount = 0;
+  let lowCount = 0;
+  
+  for (const section of allSections) {
+    const conf = section.confidence || 'medium';
+    if (conf === 'high') highCount++;
+    else if (conf === 'medium') mediumCount++;
+    else lowCount++;
+  }
+  
+  const total = allSections.length;
+  const highRatio = highCount / total;
+  const lowRatio = lowCount / total;
+  
+  // 如果大部分是 high confidence，整体为 high
+  if (highRatio >= 0.7 && lowRatio < 0.1) {
+    return 'high';
+  }
+  
+  // 如果低置信度占比太高，整体为 low
+  if (lowRatio >= 0.5) {
+    return 'low';
+  }
+  
+  // 其他情况为 medium
+  return 'medium';
+}
+
 // ==========================================
 // Step 1.2: 提取 Block 特征
 // ==========================================
 
 /**
+ * 章节编号模式正则
+ * 
+ * 匹配常见的中英文章节编号格式
+ */
+const SECTION_NUMBER_PATTERNS = [
+  /^第[一二三四五六七八九十百\d]+[章节部分篇]/,      // 第一章、第二节
+  /^[0-9]+\.\s*/,                                      // 1. 2.
+  /^[一二三四五六七八九十]+[、\.\s]/,                  // 一、 二、
+  /^Chapter\s+\d+/i,                                    // Chapter 1
+  /^Part\s+\d+/i,                                       // Part 1
+  /^Section\s+\d+/i,                                    // Section 1
+  /^\d+\.\d+\s*/,                                       // 1.1 2.3
+  /^[A-Z]\.\s*/,                                        // A. B.
+  /^[（\(][一二三四五六七八九十\d]+[）\)]/,            // (一) (1)
+];
+
+/**
+ * 从 Lexical TextNode 提取样式信息
+ * 
+ * @tag structure-v2
+ */
+function extractStyleFromLexicalTextNode(textNode: LexicalNode): {
+  fontSize: number | null;
+  isBold: boolean;
+  isItalic: boolean;
+} {
+  if (!$isTextNode(textNode)) {
+    return { fontSize: null, isBold: false, isItalic: false };
+  }
+  
+  // 提取格式标志
+  const format = textNode.getFormat();
+  const isBold = (format & 1) !== 0;     // IS_BOLD = 1
+  const isItalic = (format & 2) !== 0;   // IS_ITALIC = 2
+  
+  // 提取字号（从 style 字符串解析）
+  let fontSize: number | null = null;
+  const style = textNode.getStyle() || '';
+  const fontSizeMatch = style.match(/font-size:\s*(\d+(?:\.\d+)?)(px|pt)?/i);
+  if (fontSizeMatch) {
+    fontSize = parseFloat(fontSizeMatch[1]);
+    // 如果是 pt，转换为 px（1pt ≈ 1.33px）
+    if (fontSizeMatch[2]?.toLowerCase() === 'pt') {
+      fontSize = fontSize * 1.33;
+    }
+  }
+  
+  return { fontSize, isBold, isItalic };
+}
+
+/**
+ * 从 Lexical 元素节点提取对齐方式
+ * 
+ * @tag structure-v2
+ */
+function extractAlignFromLexicalElement(elementNode: LexicalNode): 'left' | 'center' | 'right' | 'justify' | null {
+  if (!$isElementNode(elementNode)) {
+    return null;
+  }
+  
+  // 使用 any 类型因为 Lexical 的 ElementNode 可能有不同的对齐方式获取方法
+  const format = (elementNode as any).getFormatType?.() || (elementNode as any).getFormat?.();
+  if (format) {
+    const formatStr = String(format).toLowerCase();
+    if (formatStr === 'center') return 'center';
+    if (formatStr === 'right') return 'right';
+    if (formatStr === 'justify') return 'justify';
+    if (formatStr === 'left') return 'left';
+  }
+  
+  return null;
+}
+
+/**
  * 提取单个 block 的特征
+ * 
+ * @tag structure-v2 - 重构为提取真实样式信息
  */
 function extractBlockFeatures(block: UnifiedBlock, source: 'lexical' | 'ast'): BlockFeatures {
   const { node, id, index, type, text } = block;
@@ -482,18 +722,71 @@ function extractBlockFeatures(block: UnifiedBlock, source: 'lexical' | 'ast'): B
     }
   }
   
-  // 字号和加粗（AST 中没有直接提供，使用默认值）
-  // TODO: 如果未来 AST 支持样式信息，可以在这里提取
-  const fontSize = DEFAULT_BODY_FONT_SIZE;
-  const isBold = false;
+  // ========== v2: 提取真实样式信息 ==========
   
-  // 文本特征
+  let fontSize: number | null = null;
+  let isBold = false;
+  let isItalic = false;
+  let textAlign: 'left' | 'center' | 'right' | 'justify' | null = null;
+  
+  if (source === 'lexical' && $isElementNode(node as LexicalNode)) {
+    // 从 Lexical 元素节点提取对齐方式
+    textAlign = extractAlignFromLexicalElement(node as LexicalNode);
+    
+    // 遍历子节点提取样式（取第一个非空文本节点的样式作为代表）
+    const elementNode = node as LexicalNode;
+    const children = (elementNode as any).getChildren?.() || [];
+    
+    let totalBoldChars = 0;
+    let totalItalicChars = 0;
+    let totalChars = 0;
+    let maxFontSize: number | null = null;
+    
+    for (const child of children) {
+      if ($isTextNode(child)) {
+        const childText = child.getTextContent();
+        const charCount = childText.length;
+        totalChars += charCount;
+        
+        const style = extractStyleFromLexicalTextNode(child);
+        
+        if (style.isBold) totalBoldChars += charCount;
+        if (style.isItalic) totalItalicChars += charCount;
+        if (style.fontSize !== null) {
+          if (maxFontSize === null || style.fontSize > maxFontSize) {
+            maxFontSize = style.fontSize;
+          }
+        }
+      }
+    }
+    
+    // 如果超过 50% 的文本是粗体，认为整段是粗体
+    if (totalChars > 0) {
+      isBold = totalBoldChars / totalChars > 0.5;
+      isItalic = totalItalicChars / totalChars > 0.5;
+    }
+    fontSize = maxFontSize;
+  } else if (source === 'ast') {
+    // 从 DocumentAst 提取样式（目前 AST 不保存样式信息，使用默认值）
+    // TODO: 如果 AST 未来支持样式信息，在这里提取
+  }
+  
+  // ========== 文本特征 ==========
+  
   const textLength = text.length;
+  const trimmedText = text.trim();
   const isSingleLine = !text.includes('\n') && textLength < 100;
-  const startsWithNumbering = /^(第[一二三四五六七八九十\d]+[章节部分]|[0-9]+\.|[一二三四五六七八九十]+、|Chapter\s+\d+|Part\s+\d+)/i.test(text.trim());
+  const lineLength = isSingleLine ? textLength : text.split('\n')[0].length;
   
-  // 位置特征
+  // 检测章节编号模式
+  const startsWithNumbering = SECTION_NUMBER_PATTERNS.some(p => p.test(trimmedText));
+  const hasSectionNumberPrefix = startsWithNumbering;
+  
+  // ========== 位置特征 ==========
+  
+  const positionIndex = index;
   const isNearTop = index <= 2;
+  const isInFirstScreen = index < FIRST_SCREEN_PARAGRAPH_COUNT;
   
   return {
     block: node,
@@ -503,23 +796,34 @@ function extractBlockFeatures(block: UnifiedBlock, source: 'lexical' | 'ast'): B
     headingLevelFromStyle,
     fontSize,
     isBold,
+    isItalic,
+    textAlign,
+    marginTop: null,  // TODO: 需要从 DOM 或样式解析
+    marginBottom: null,
     text,
     textLength,
     isSingleLine,
+    lineLength,
     startsWithNumbering,
+    hasSectionNumberPrefix,
+    positionIndex,
     isNearTop,
+    isInFirstScreen,
   };
 }
 
 /**
  * 计算正文字号
  * 
- * 使用 paragraph 类型块的中位数字号作为正文字号
+ * 使用非标题段落的字号中位数作为基准正文字号。
+ * 
+ * @tag structure-v2 - 处理 nullable fontSize
  */
 function computeBodyFontSize(features: BlockFeatures[]): number {
+  // 只考虑非标题且有足够文本内容的段落
   const paragraphFontSizes = features
-    .filter(f => !f.isHeadingStyle && f.textLength > 20)
-    .map(f => f.fontSize);
+    .filter(f => !f.isHeadingStyle && f.textLength > 20 && f.fontSize !== null)
+    .map(f => f.fontSize as number);
   
   if (paragraphFontSizes.length === 0) {
     return DEFAULT_BODY_FONT_SIZE;
@@ -538,44 +842,131 @@ function computeBodyFontSize(features: BlockFeatures[]): number {
 // ==========================================
 
 /**
+ * 计算标题得分结果
+ * 
+ * @tag structure-v2
+ */
+interface HeadingScoreResult {
+  /** 综合得分 */
+  totalScore: number;
+  /** 仅样式贡献的得分 */
+  styleScore: number;
+  /** 章节来源 */
+  source: ChapterSource;
+  /** 置信度 */
+  confidence: Confidence;
+}
+
+/**
  * 计算标题得分
  * 
- * 得分越高，越可能是标题
+ * 综合考虑 Heading 节点、样式特征、位置特征
+ * 
+ * @tag structure-v2 - 重构为更复杂的评分系统
  */
-function computeHeadingScore(f: BlockFeatures, bodyFontSize: number): number {
-  let score = 0;
+function computeHeadingScore(f: BlockFeatures, bodyFontSize: number): HeadingScoreResult {
+  let headingNodeScore = 0;  // 来自 HeadingNode 的得分
+  let styleScore = 0;        // 来自样式的得分
   
-  // 内置 heading 样式权重最大
+  // ========== 1. HeadingNode 得分 ==========
+  
   if (f.isHeadingStyle) {
-    score += 4;
+    headingNodeScore += 4;
+    // 低层级 heading（H1/H2）权重更高
+    if (f.headingLevelFromStyle !== undefined && f.headingLevelFromStyle <= 2) {
+      headingNodeScore += 1;
+    }
   }
   
-  // 字号明显大于正文
-  if (f.fontSize > bodyFontSize + 2) {
-    score += 2;
+  // ========== 2. 样式得分 ==========
+  
+  // 2.1 字号优势
+  if (f.fontSize !== null) {
+    const fontDelta = f.fontSize - bodyFontSize;
+    if (fontDelta >= 6) {
+      styleScore += 3;  // 显著大于正文
+    } else if (fontDelta >= 4) {
+      styleScore += 2;  // 明显大于正文
+    } else if (fontDelta >= 2) {
+      styleScore += 1;  // 略大于正文
+    }
   }
   
-  // 加粗
+  // 2.2 加粗
   if (f.isBold) {
-    score += 1;
+    styleScore += 2;
   }
   
-  // 单行短文本（更像标题）
-  if (f.isSingleLine && f.textLength > 0 && f.textLength < 80) {
-    score += 1;
+  // 2.3 居中对齐
+  if (f.textAlign === 'center') {
+    styleScore += 1;
   }
   
-  // 以编号开头
-  if (f.startsWithNumbering) {
-    score += 1;
+  // 2.4 合理的标题长度
+  if (f.isSingleLine && f.lineLength >= TITLE_LENGTH_MIN && f.lineLength <= TITLE_LENGTH_MAX) {
+    styleScore += 1;
   }
   
-  // 文档顶部的更可能是标题
-  if (f.isNearTop && f.isSingleLine) {
-    score += 1;
+  // 2.5 章节编号前缀
+  if (f.hasSectionNumberPrefix) {
+    styleScore += 2;
   }
   
-  return score;
+  // 2.6 首屏加权（越靠前越可能是重要标题）
+  if (f.isInFirstScreen) {
+    if (f.positionIndex === 0) {
+      styleScore += 2;  // 文档第一段，很可能是主标题
+    } else if (f.positionIndex <= 2) {
+      styleScore += 1;  // 前几段
+    }
+  }
+  
+  // ========== 3. 负面因素 ==========
+  
+  // 太长的文本不太可能是标题
+  if (f.textLength > 150) {
+    styleScore -= 2;
+  }
+  
+  // 多行文本不太可能是标题
+  if (!f.isSingleLine) {
+    styleScore -= 1;
+  }
+  
+  // ========== 4. 确定来源和置信度 ==========
+  
+  const totalScore = headingNodeScore + styleScore;
+  let source: ChapterSource;
+  let confidence: Confidence;
+  
+  if (f.isHeadingStyle && styleScore >= STYLE_SCORE_MEDIUM_THRESHOLD) {
+    // 有 HeadingNode 且样式也强
+    source = 'mixed';
+    confidence = 'high';
+  } else if (f.isHeadingStyle) {
+    // 仅有 HeadingNode
+    source = 'heading';
+    confidence = styleScore >= 2 ? 'high' : 'medium';
+  } else if (styleScore >= STYLE_SCORE_HIGH_THRESHOLD) {
+    // 无 HeadingNode，但样式得分很高
+    source = 'style_inferred';
+    confidence = 'medium';
+  } else if (styleScore >= STYLE_SCORE_MEDIUM_THRESHOLD) {
+    // 无 HeadingNode，样式得分中等
+    source = 'style_inferred';
+    confidence = 'low';
+  } else {
+    // 样式得分较低
+    source = 'style_inferred';
+    confidence = 'low';
+  }
+  
+  return {
+    totalScore,
+    styleScore,
+    source,
+    confidence,
+  };
 }
 
 // ==========================================
@@ -583,29 +974,70 @@ function computeHeadingScore(f: BlockFeatures, bodyFontSize: number): number {
 // ==========================================
 
 /**
- * 将标题候选分配到逻辑层级 1/2/3
+ * 层级分配输入参数
  */
-function assignLogicalLevel(f: BlockFeatures & { headingScore: number }, bodyFontSize: number): 1 | 2 | 3 {
-  // 优先使用已有的 heading level
+interface LevelAssignmentInput {
+  features: BlockFeatures;
+  scoreResult: HeadingScoreResult;
+  bodyFontSize: number;
+}
+
+/**
+ * 将标题候选分配到逻辑层级 1/2/3
+ * 
+ * @tag structure-v2 - 综合考虑 HeadingNode、样式、位置
+ */
+function assignLogicalLevel(input: LevelAssignmentInput): 1 | 2 | 3 {
+  const { features: f, scoreResult, bodyFontSize } = input;
+  
+  // ========== 1. 优先使用 HeadingNode 的层级 ==========
+  
   if (f.isHeadingStyle && f.headingLevelFromStyle != null) {
     const lvl = f.headingLevelFromStyle;
+    
+    // 如果是 H1/H2/H3，直接使用
     if (lvl >= 1 && lvl <= 3) {
+      // 但是，如果样式和位置暗示这不是真正的顶级标题，可以微调
+      // 例如：H1 但在文档中间，样式也不突出 → 可能降级
+      if (lvl === 1 && !f.isNearTop && scoreResult.styleScore < STYLE_SCORE_MEDIUM_THRESHOLD) {
+        // 如果是误设的 H1（在中间位置且样式不突出），降级为 H2
+        return 2;
+      }
       return lvl as 1 | 2 | 3;
     }
+    
     // H4/H5/H6 降级为 H3
     if (lvl > 3) {
       return 3;
     }
   }
   
-  // 否则按字体差值分类
-  const delta = f.fontSize - bodyFontSize;
-  if (delta >= DOC_TITLE_FONT_SIZE_ADVANTAGE) {
+  // ========== 2. 纯样式推断的层级分配 ==========
+  
+  // 首屏 + 高样式得分 → level=1
+  if (f.isInFirstScreen && scoreResult.styleScore >= STYLE_SCORE_HIGH_THRESHOLD) {
     return 1;
   }
-  if (delta >= 2) {
+  
+  // 按字体差值分类
+  if (f.fontSize !== null) {
+    const delta = f.fontSize - bodyFontSize;
+    if (delta >= DOC_TITLE_FONT_SIZE_ADVANTAGE) {
+      // 字号显著大于正文
+      return f.isInFirstScreen ? 1 : 2;
+    }
+    if (delta >= 2) {
+      // 字号略大于正文
+      return 2;
+    }
+  }
+  
+  // 有章节编号但字号不突出
+  if (f.hasSectionNumberPrefix) {
     return 2;
   }
+  
+  // 默认为最低层级
   return 3;
 }
 
@@ -617,6 +1049,8 @@ function assignLogicalLevel(f: BlockFeatures & { headingScore: number }, bodyFon
  * 构造 Section 树
  * 
  * 使用栈来维护层级关系
+ * 
+ * @tag structure-v2 - 包含 source/confidence/styleScore 字段
  */
 function buildSectionTree(
   headingCandidates: HeadingCandidate[],
@@ -639,6 +1073,11 @@ function buildSectionTree(
       endBlockIndex: totalBlockCount, // 先设为文档结尾，后面修正
       ownParagraphBlockIds: [],
       children: [],
+      // v2 新增字段
+      source: h.source,
+      confidence: h.confidence,
+      headingLevel: h.headingLevel,
+      styleScore: h.styleScore,
     };
     
     sectionMap.set(h.id, node);
@@ -959,12 +1398,17 @@ export function buildDocSkeletonFromAst(
  * 从 DocStructureSnapshot 构建文档骨架
  * 
  * 这是核心转换函数，将内部结构映射为 LLM 友好的骨架
+ * 
+ * @tag structure-v2 - 包含 source/confidence 等追踪字段
  */
 export function buildDocSkeletonFromSnapshot(
   snapshot: DocStructureSnapshot
 ): DocSkeleton {
   // 收集所有章节标题用于语言检测
   const allTitles: string[] = [];
+  
+  // 收集所有置信度用于计算全局置信度
+  const allConfidences: Confidence[] = [];
   
   // 计数器
   let chapterCount = 0;
@@ -986,6 +1430,11 @@ export function buildDocSkeletonFromSnapshot(
     indexInParent: number
   ): DocSectionSkeleton {
     allTitles.push(node.titleText);
+    
+    // 收集置信度
+    if (node.confidence) {
+      allConfidences.push(node.confidence);
+    }
     
     // 1. 确定角色
     const role = determineRole(node, parentRole, node.titleText);
@@ -1028,6 +1477,11 @@ export function buildDocSkeletonFromSnapshot(
       startBlockIndex: node.startBlockIndex,
       endBlockIndex: node.endBlockIndex,
       paragraphCount: node.ownParagraphBlockIds.length,
+      // v2 字段
+      source: node.source,
+      confidence: node.confidence,
+      headingLevel: node.headingLevel,
+      styleScore: node.styleScore,
     };
   }
   
@@ -1042,6 +1496,9 @@ export function buildDocSkeletonFromSnapshot(
   // 计算总章节数
   const totalSections = chapterCount + sectionCount;
   
+  // 计算全局置信度
+  const globalConfidence = computeMetaGlobalConfidence(allConfidences);
+  
   return {
     sections,
     meta: {
@@ -1052,8 +1509,38 @@ export function buildDocSkeletonFromSnapshot(
       languageHint,
       totalSections,
       totalParagraphs,
+      // v2 字段
+      globalConfidence,
+      baseBodyFontSize: snapshot.meta.baseBodyFontSize,
     },
   };
+}
+
+/**
+ * 计算 DocSkeletonMeta 的全局置信度
+ * 
+ * @tag structure-v2
+ */
+function computeMetaGlobalConfidence(confidences: Confidence[]): Confidence {
+  if (confidences.length === 0) {
+    return 'low';
+  }
+  
+  let highCount = 0;
+  let lowCount = 0;
+  
+  for (const conf of confidences) {
+    if (conf === 'high') highCount++;
+    else if (conf === 'low') lowCount++;
+  }
+  
+  const total = confidences.length;
+  const highRatio = highCount / total;
+  const lowRatio = lowCount / total;
+  
+  if (highRatio >= 0.7 && lowRatio < 0.1) return 'high';
+  if (lowRatio >= 0.5) return 'low';
+  return 'medium';
 }
 
 /**

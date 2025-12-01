@@ -1,0 +1,261 @@
+/**
+ * InlineMarkPlugin 样式
+ * 
+ * 定义各种 InlineMark 类型和样式的视觉表现
+ * 
+ * 遵循 Liquid Glass 设计系统：
+ * - 动画时长: 180-260ms
+ * - 文字对比度: >= 4.5:1
+ * - 不使用大幅 Q 弹/果冻动效
+ */
+
+/* ==========================================
+   基础容器
+   ========================================== */
+
+.inline-mark-plugin-container {
+  z-index: 10;
+  overflow: hidden;
+}
+
+/* ==========================================
+   通用标记样式
+   ========================================== */
+
+.inline-mark {
+  /* 基础样式 */
+  mix-blend-mode: multiply;
+  border-radius: 2px;
+  transition: background-color 200ms ease-out, opacity 200ms ease-out;
+}
+
+.inline-mark:hover {
+  opacity: 0.85;
+}
+
+/* ==========================================
+   标记类型样式 (Kind)
+   ========================================== */
+
+/* key_term - 关键词/重点词 */
+.inline-mark-key-term {
+  /* 使用温暖的黄色高亮，类似荧光笔 */
+  --mark-color: rgba(255, 213, 79, 0.45);
+  --mark-color-hover: rgba(255, 213, 79, 0.6);
+  --mark-border-color: rgba(255, 160, 0, 0.5);
+}
+
+/* ai_suggestion - AI 建议 */
+.inline-mark-ai-suggestion {
+  /* 使用淡蓝色，表示 AI 辅助 */
+  --mark-color: rgba(100, 181, 246, 0.35);
+  --mark-color-hover: rgba(100, 181, 246, 0.5);
+  --mark-border-color: rgba(30, 136, 229, 0.5);
+}
+
+/* comment_anchor - 批注锚点 */
+.inline-mark-comment-anchor {
+  /* 使用淡紫色，表示有关联评论 */
+  --mark-color: rgba(186, 104, 200, 0.3);
+  --mark-color-hover: rgba(186, 104, 200, 0.45);
+  --mark-border-color: rgba(142, 36, 170, 0.5);
+}
+
+/* custom - 自定义标记 */
+.inline-mark-custom {
+  /* 使用中性灰色 */
+  --mark-color: rgba(158, 158, 158, 0.3);
+  --mark-color-hover: rgba(158, 158, 158, 0.45);
+  --mark-border-color: rgba(97, 97, 97, 0.5);
+}
+
+/* ==========================================
+   渲染样式 (Style)
+   ========================================== */
+
+/* highlight - 高亮背景 */
+.inline-mark-style-highlight {
+  background-color: var(--mark-color);
+}
+
+.inline-mark-style-highlight:hover {
+  background-color: var(--mark-color-hover);
+}
+
+/* underline - 下划线 */
+.inline-mark-style-underline {
+  background-color: transparent;
+  border-bottom: 2px solid var(--mark-border-color);
+}
+
+.inline-mark-style-underline:hover {
+  border-bottom-width: 3px;
+}
+
+/* dotted - 点状下划线 */
+.inline-mark-style-dotted {
+  background-color: transparent;
+  border-bottom: 2px dotted var(--mark-border-color);
+}
+
+.inline-mark-style-dotted:hover {
+  border-bottom-width: 3px;
+}
+
+/* background - 纯背景色（比 highlight 更淡） */
+.inline-mark-style-background {
+  background-color: var(--mark-color);
+  opacity: 0.6;
+}
+
+.inline-mark-style-background:hover {
+  opacity: 0.8;
+}
+
+/* none - 仅逻辑标记，不渲染样式 */
+.inline-mark-style-none {
+  background-color: transparent;
+  border: none;
+  pointer-events: none;
+}
+
+/* ==========================================
+   Tooltip 样式
+   ========================================== */
+
+.inline-mark-tooltip {
+  /* Overlay 层级的玻璃样式 */
+  background-color: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  
+  border-radius: 8px;
+  padding: 6px 10px;
+  
+  /* 阴影 */
+  box-shadow:
+    0 8px 24px rgba(15, 23, 42, 0.12),
+    0 0 0 1px rgba(255, 255, 255, 0.6);
+  
+  /* 文字样式 */
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary, #1d1d1f);
+  white-space: nowrap;
+  
+  /* 动画 */
+  animation: tooltip-fade-in 180ms ease-out;
+  
+  /* 层级 */
+  z-index: 1000;
+}
+
+@keyframes tooltip-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ==========================================
+   暗色模式支持
+   ========================================== */
+
+@media (prefers-color-scheme: dark) {
+  .inline-mark {
+    mix-blend-mode: screen;
+  }
+
+  /* key_term - 关键词/重点词 (暗色) */
+  .inline-mark-key-term {
+    --mark-color: rgba(255, 193, 7, 0.35);
+    --mark-color-hover: rgba(255, 193, 7, 0.5);
+    --mark-border-color: rgba(255, 193, 7, 0.6);
+  }
+
+  /* ai_suggestion - AI 建议 (暗色) */
+  .inline-mark-ai-suggestion {
+    --mark-color: rgba(33, 150, 243, 0.35);
+    --mark-color-hover: rgba(33, 150, 243, 0.5);
+    --mark-border-color: rgba(33, 150, 243, 0.6);
+  }
+
+  /* comment_anchor - 批注锚点 (暗色) */
+  .inline-mark-comment-anchor {
+    --mark-color: rgba(156, 39, 176, 0.35);
+    --mark-color-hover: rgba(156, 39, 176, 0.5);
+    --mark-border-color: rgba(156, 39, 176, 0.6);
+  }
+
+  /* custom - 自定义标记 (暗色) */
+  .inline-mark-custom {
+    --mark-color: rgba(189, 189, 189, 0.25);
+    --mark-color-hover: rgba(189, 189, 189, 0.4);
+    --mark-border-color: rgba(189, 189, 189, 0.5);
+  }
+
+  .inline-mark-tooltip {
+    background-color: rgba(32, 33, 36, 0.92);
+    color: #e8eaed;
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+}
+
+/* ==========================================
+   减少透明度模式支持 (reduceTransparency)
+   ========================================== */
+
+@media (prefers-reduced-transparency: reduce) {
+  .inline-mark-tooltip {
+    background-color: #ffffff;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .inline-mark-style-highlight,
+  .inline-mark-style-background {
+    opacity: 1;
+  }
+
+  /* 使用更不透明的颜色 */
+  .inline-mark-key-term {
+    --mark-color: rgba(255, 213, 79, 0.7);
+    --mark-color-hover: rgba(255, 213, 79, 0.85);
+  }
+
+  .inline-mark-ai-suggestion {
+    --mark-color: rgba(100, 181, 246, 0.6);
+    --mark-color-hover: rgba(100, 181, 246, 0.75);
+  }
+
+  .inline-mark-comment-anchor {
+    --mark-color: rgba(186, 104, 200, 0.55);
+    --mark-color-hover: rgba(186, 104, 200, 0.7);
+  }
+
+  .inline-mark-custom {
+    --mark-color: rgba(158, 158, 158, 0.55);
+    --mark-color-hover: rgba(158, 158, 158, 0.7);
+  }
+}
+
+/* ==========================================
+   动画减少模式支持
+   ========================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .inline-mark {
+    transition: none;
+  }
+
+  .inline-mark-tooltip {
+    animation: none;
+  }
+}
+

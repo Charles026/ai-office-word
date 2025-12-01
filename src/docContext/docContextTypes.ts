@@ -10,6 +10,8 @@
  * - focus：高分辨率焦点（当前选区/章节）
  * - neighborhood：邻域上下文（前后章节摘要）
  * - global：全局信息（文档标题/大纲）
+ * 
+ * @version 2.0.0 - 新增结构置信度和标题来源追踪
  */
 
 // ==========================================
@@ -20,6 +22,68 @@
  * 文档作用范围
  */
 export type DocScope = 'selection' | 'section' | 'document';
+
+// ==========================================
+// v2: 结构识别置信度类型
+// ==========================================
+
+/**
+ * 文档标题来源
+ * 
+ * 标识文档标题是如何被识别出来的
+ * 
+ * @tag structure-v2
+ */
+export type DocTitleSource =
+  | 'explicit_meta'    // 来自显式的元数据字段（如文档属性）
+  | 'heading'          // 来自 Heading 节点（H1/H2）
+  | 'style_inferred'   // 通过样式推断（字号、加粗、居中等）
+  | 'filename'         // 从文件名推断
+  | 'none';            // 无法识别
+
+/**
+ * 置信度等级
+ * 
+ * 用于表达结构识别的可靠程度
+ * 
+ * @tag structure-v2
+ */
+export type Confidence = 'high' | 'medium' | 'low';
+
+/**
+ * 章节来源
+ * 
+ * 标识章节是如何被识别出来的
+ * 
+ * @tag structure-v2
+ */
+export type ChapterSource =
+  | 'heading'          // 来自 Heading 节点
+  | 'style_inferred'   // 通过样式推断
+  | 'mixed';           // 混合来源（有 Heading 节点，但样式也参与判定）
+
+/**
+ * 标题候选项
+ * 
+ * 在识别文档标题时，系统会生成多个候选，最终选择最佳者
+ * 保留候选列表用于调试和用户确认
+ * 
+ * @tag structure-v2
+ */
+export interface TitleCandidate {
+  /** 标题文本 */
+  text: string;
+  /** 来源类型 */
+  source: DocTitleSource;
+  /** 置信度 */
+  confidence: Confidence;
+  /** 在文档中的位置索引（段落序号） */
+  positionIndex: number;
+  /** 识别原因（用于调试和解释） */
+  reasons: string[];
+  /** 综合得分（内部使用） */
+  score?: number;
+}
 
 /**
  * Document Scope 模式 (v1.2)
@@ -88,6 +152,7 @@ export interface SectionPreview {
  * 这是"有几章/第几章"类问题的唯一数据来源。
  * 
  * @tag structure-stats-sot
+ * @tag structure-v2 - 新增 source/confidence/headingLevel/styleScore
  */
 export interface ChapterInfo {
   /** 章节 ID（对应 DocStructureEngine 的 section.id） */
@@ -106,6 +171,43 @@ export interface ChapterInfo {
   paragraphCount: number;
   /** 语义角色（从 DocSkeleton 获取） */
   role?: 'chapter' | 'section' | 'subsection' | 'appendix' | 'meta';
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /**
+   * 章节来源
+   * 
+   * 标识这个章节是如何被识别出来的：
+   * - 'heading': 来自 Heading 节点（可靠）
+   * - 'style_inferred': 通过样式推断（可能不准）
+   * - 'mixed': 混合来源
+   */
+  source?: ChapterSource;
+  
+  /**
+   * 识别置信度
+   * 
+   * - 'high': 有明确的 Heading 节点 + 样式一致
+   * - 'medium': 有 Heading 但样式不典型，或样式推断但信号较强
+   * - 'low': 纯样式推断且信号较弱
+   */
+  confidence?: Confidence;
+  
+  /**
+   * 原始 Heading 层级
+   * 
+   * 如果来自 HeadingNode，记录原始的 h1-h6 层级。
+   * 如果是 style_inferred，为 null。
+   */
+  headingLevel?: number | null;
+  
+  /**
+   * 样式得分
+   * 
+   * 基于字号、加粗、对齐等样式特征计算的综合得分。
+   * 用于辅助判断和调试。
+   */
+  styleScore?: number | null;
 }
 
 /**
@@ -115,6 +217,7 @@ export interface ChapterInfo {
  * LLM 禁止自行推断结构，必须使用这些字段。
  * 
  * @tag structure-stats-sot
+ * @tag structure-v2 - 新增 globalConfidence/baseBodyFontSize
  */
 export interface DocStructure {
   /** 章级别（level=1 或 role=chapter）的章节列表 */
@@ -125,6 +228,28 @@ export interface DocStructure {
   chapterCount: number;
   /** 所有章节总数（含子章节） */
   totalSectionCount: number;
+  
+  // ========== v2: 结构识别追踪 ==========
+  
+  /**
+   * 全局置信度
+   * 
+   * 基于所有章节的 confidence 分布计算：
+   * - 'high': 所有章节都是 high/medium confidence
+   * - 'medium': 存在部分 style_inferred 且 low confidence 的章节
+   * - 'low': 大部分章节为 low confidence 或结构不明确
+   * 
+   * 当 globalConfidence='low' 时，structuralQueryResolver 应返回澄清而非确定答案。
+   */
+  globalConfidence?: Confidence;
+  
+  /**
+   * 基准正文字号
+   * 
+   * 通过分析文档中非标题段落的字号分布（取中位数）得出。
+   * 用于判断某段落的字号是否"显著大于正文"。
+   */
+  baseBodyFontSize?: number | null;
 }
 
 /**
@@ -152,16 +277,18 @@ export interface DocStats {
  * 文档级别的标识信息，与章节标题严格区分。
  * 
  * @tag structure-stats-sot
+ * @tag structure-v2 - 新增 titleSource/titleConfidence/candidates
  */
 export interface DocMeta {
   /** 
    * 文档标题
    * 
    * 优先级：
-   * 1. 文件名（如果有）
-   * 2. DocStructureEngine 识别的 doc_title
-   * 3. 第一个 H1 标题
-   * 4. null（明确表示没有文档标题）
+   * 1. 显式元数据（explicit_meta）
+   * 2. 高置信度的 Heading 节点
+   * 3. 高置信度的样式推断
+   * 4. 文件名
+   * 5. null（明确表示没有文档标题）
    * 
    * 注意：这与"章节标题"是不同的概念！
    */
@@ -169,9 +296,37 @@ export interface DocMeta {
   /** 文档来源（如果有） */
   source?: string;
   /** 文件名（不含路径） */
-  fileName?: string;
+  filename?: string | null;
   /** 是否有显式的文档标题 */
   hasExplicitTitle: boolean;
+  
+  // ========== v2: 标题识别追踪 ==========
+  
+  /**
+   * 标题来源
+   * 
+   * 标识当前 title 是如何被识别出来的
+   */
+  titleSource?: DocTitleSource;
+  
+  /**
+   * 标题置信度
+   * 
+   * - 'high': 来自 explicit_meta 或明确的 H1 + 样式一致
+   * - 'medium': 来自 Heading 但位置/样式不典型，或样式推断但信号较强
+   * - 'low': 纯样式推断且信号较弱，或来自文件名
+   */
+  titleConfidence?: Confidence;
+  
+  /**
+   * 标题候选列表
+   * 
+   * 保留所有可能的标题候选，用于：
+   * - 调试和分析
+   * - 低置信度时让用户确认
+   * - 提供备选项
+   */
+  candidates?: TitleCandidate[];
 }
 
 // ==========================================

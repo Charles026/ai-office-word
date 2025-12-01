@@ -12,9 +12,10 @@
  * - 不确定时返回 low confidence，让 Copilot 走澄清路径
  * 
  * @tag structure-stats-sot v1.5
+ * @tag structure-v2 - 使用 globalConfidence 和章节级别 confidence
  */
 
-import type { DocContextEnvelope, DocStructure, ChapterInfo } from '../docContext/docContextTypes';
+import type { DocContextEnvelope, DocStructure, ChapterInfo, Confidence, DocMeta } from '../docContext/docContextTypes';
 
 // ==========================================
 // 类型定义
@@ -44,6 +45,8 @@ export type TargetLevel = 'chapter' | 'section' | 'paragraph';
 
 /**
  * 结构查询解析结果
+ * 
+ * @tag structure-v2 - 支持 medium confidence 和 shortCircuit 控制
  */
 export interface StructuralQueryResolution {
   /** 查询类型 */
@@ -56,14 +59,33 @@ export interface StructuralQueryResolution {
   sectionIndex?: number;
   /** 段落索引（1-based） */
   paragraphIndex?: number;
-  /** 置信度 */
-  confidence: 'high' | 'low';
+  /** 置信度（v2: 支持 medium） */
+  confidence: Confidence;
   /** 需要澄清时的问题 */
   clarificationQuestion?: string;
   /** 直接回答（如果可以从 structure/stats 获取） */
   directAnswer?: string;
   /** 调试信息 */
   debugInfo?: string;
+  
+  // ========== v2: 新增字段 ==========
+  
+  /**
+   * 是否应该短路（不走 LLM）
+   * 
+   * - true: 可以直接返回 directAnswer 或 clarificationQuestion
+   * - false: 应该把结构信息传给 LLM 做更复杂的处理
+   * 
+   * 例如：混合意图（"帮我重写第一章，顺便告诉我有几章"）应该 shortCircuit=false
+   */
+  shortCircuit?: boolean;
+  
+  /**
+   * 结构源置信度
+   * 
+   * 来自 DocStructure.globalConfidence，用于判断结构信息的可靠性
+   */
+  structureConfidence?: Confidence;
 }
 
 // ==========================================
@@ -135,18 +157,43 @@ const NTH_SECTION_PATTERN = /第\s*([一二三四五六七八九十\d]+)\s*(节|
 const NTH_PARAGRAPH_PATTERN = /第\s*([一二三四五六七八九十\d]+)\s*(段|段落)/;
 
 /**
- * 编辑意图关键词
+ * 编辑意图关键词（强）
  * 
- * 如果用户文本包含这些词，应该跳过结构查询匹配，让 LLM 解析为编辑意图
- * 这样 "帮我重写第一章" 不会被误识别为 locate_chapter
+ * 明确的编辑动词，出现时应该让 LLM 处理
  * 
- * @tag structure-stats-sot v1.5
+ * @tag structure-v2
  */
-const EDIT_INTENT_KEYWORDS = [
+const EDIT_INTENT_KEYWORDS_STRONG = [
   '重写', '改写', '修改', '编辑', '润色', '精简', '扩展', '优化',
-  '帮我', '请', '把', '将', '让', '使',
+  '删除', '删掉', '增加', '添加', '调整', '替换', '更新',
   'rewrite', 'edit', 'modify', 'polish', 'expand', 'shorten', 'improve',
+  'delete', 'remove', 'add', 'update', 'replace',
 ];
+
+/**
+ * 编辑意图关键词（弱）
+ * 
+ * 请求类前缀，单独出现不足以判定为编辑意图，
+ * 但与结构词同时出现时应该让 LLM 处理
+ * 
+ * @tag structure-v2
+ */
+const EDIT_INTENT_KEYWORDS_WEAK = [
+  '帮我', '请', '把', '将', '让', '使', '能不能', '可以',
+  'please', 'can you', 'could you', 'help me',
+];
+
+/**
+ * 检测是否包含编辑意图
+ * 
+ * @tag structure-v2
+ */
+function hasEditIntent(text: string): { hasStrong: boolean; hasWeak: boolean } {
+  const lowerText = text.toLowerCase();
+  const hasStrong = EDIT_INTENT_KEYWORDS_STRONG.some(kw => lowerText.includes(kw));
+  const hasWeak = EDIT_INTENT_KEYWORDS_WEAK.some(kw => lowerText.includes(kw));
+  return { hasStrong, hasWeak };
+}
 
 // ==========================================
 // 主函数
@@ -160,6 +207,7 @@ const EDIT_INTENT_KEYWORDS = [
  * @returns 解析结果
  * 
  * @tag structure-stats-sot
+ * @tag structure-v2 - 使用 globalConfidence 和混合意图检测
  */
 export function resolveStructuralQuery(
   userText: string,
@@ -168,51 +216,63 @@ export function resolveStructuralQuery(
   const text = userText.toLowerCase().trim();
   const { structure, stats, docMeta } = envelope.global;
   
-  // 0. 🆕 v1.5: 编辑意图过滤
-  // 如果用户文本包含编辑关键词（如"重写""改写""帮我"），跳过结构查询匹配
-  // 让 LLM 解析为编辑意图，这样 "帮我重写第一章" 不会被误识别为 locate_chapter
-  const hasEditIntent = EDIT_INTENT_KEYWORDS.some(keyword => text.includes(keyword));
-  if (hasEditIntent) {
+  // 获取结构全局置信度
+  const structureConfidence = structure?.globalConfidence || 'low';
+  
+  // 0. 编辑意图检测
+  const editIntent = hasEditIntent(text);
+  
+  // 如果包含强编辑意图词，跳过结构查询匹配，让 LLM 处理
+  if (editIntent.hasStrong) {
     return {
       kind: 'other',
       confidence: 'high',
-      debugInfo: 'skipped - contains edit intent keyword',
+      shortCircuit: false,  // 不短路，让 LLM 处理
+      structureConfidence,
+      debugInfo: 'skipped - contains strong edit intent keyword',
     };
   }
   
   // 1. 章数量查询
   if (matchesAny(text, CHAPTER_COUNT_PATTERNS)) {
-    return resolveChapterCount(structure);
+    const result = resolveChapterCount(structure);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 2. 节数量查询
   if (matchesAny(text, SECTION_COUNT_PATTERNS)) {
-    return resolveSectionCount(structure);
+    const result = resolveSectionCount(structure);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 3. 段落数量查询
   if (matchesAny(text, PARAGRAPH_COUNT_PATTERNS)) {
-    return resolveParagraphCount(stats);
+    const result = resolveParagraphCount(stats);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 4. 字数查询
   if (matchesAny(text, WORD_COUNT_PATTERNS)) {
-    return resolveWordCount(stats);
+    const result = resolveWordCount(stats);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 5. 字符数查询
   if (matchesAny(text, CHAR_COUNT_PATTERNS)) {
-    return resolveCharCount(stats);
+    const result = resolveCharCount(stats);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 6. Token 数查询
   if (matchesAny(text, TOKEN_COUNT_PATTERNS)) {
-    return resolveTokenCount(stats);
+    const result = resolveTokenCount(stats);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 7. 文档标题查询
   if (matchesAny(text, TITLE_QUERY_PATTERNS)) {
-    return resolveTitleQuery(docMeta);
+    const result = resolveTitleQuery(docMeta);
+    return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
   }
   
   // 8. 第 N 章查询
@@ -220,7 +280,8 @@ export function resolveStructuralQuery(
   if (chapterMatch) {
     const index = parseChineseOrArabicNumber(chapterMatch[1]);
     if (index !== null) {
-      return resolveNthChapter(index, structure);
+      const result = resolveNthChapter(index, structure);
+      return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
     }
   }
   
@@ -229,7 +290,8 @@ export function resolveStructuralQuery(
   if (sectionMatch) {
     const index = parseChineseOrArabicNumber(sectionMatch[1]);
     if (index !== null) {
-      return resolveNthSection(index, structure);
+      const result = resolveNthSection(index, structure);
+      return applyGlobalConfidence(result, structureConfidence, editIntent.hasWeak);
     }
   }
   
@@ -243,6 +305,8 @@ export function resolveStructuralQuery(
         targetLevel: 'paragraph',
         paragraphIndex: index,
         confidence: 'high',
+        shortCircuit: !editIntent.hasWeak,
+        structureConfidence,
         debugInfo: `parsed paragraph index: ${index}`,
       };
     }
@@ -252,8 +316,53 @@ export function resolveStructuralQuery(
   return {
     kind: 'other',
     confidence: 'high',
+    shortCircuit: true,
+    structureConfidence,
     debugInfo: 'not a structural query',
   };
+}
+
+/**
+ * 应用全局置信度到解析结果
+ * 
+ * 当结构全局置信度为 low 时，降级解析结果的置信度并添加澄清信息
+ * 
+ * @tag structure-v2
+ */
+function applyGlobalConfidence(
+  result: StructuralQueryResolution,
+  structureConfidence: Confidence,
+  hasWeakEditIntent: boolean
+): StructuralQueryResolution {
+  // 添加结构置信度
+  result.structureConfidence = structureConfidence;
+  
+  // 如果有弱编辑意图词，不短路
+  if (hasWeakEditIntent) {
+    result.shortCircuit = false;
+    result.debugInfo = (result.debugInfo || '') + ' [has weak edit intent, not short-circuiting]';
+    return result;
+  }
+  
+  // 如果结构全局置信度为 low，降级结果置信度
+  if (structureConfidence === 'low' && result.confidence === 'high') {
+    result.confidence = 'medium';
+    result.shortCircuit = true;
+    
+    // 对于计数类查询，添加不确定提示
+    if (result.kind === 'chapter_count' || result.kind === 'section_count') {
+      const originalAnswer = result.directAnswer;
+      result.directAnswer = originalAnswer
+        ? `${originalAnswer}\n\n⚠️ 注意：当前文档主要通过样式标记标题，系统对章节结构的识别可能不够准确。`
+        : undefined;
+      result.debugInfo = (result.debugInfo || '') + ' [downgraded due to low structure confidence]';
+    }
+    return result;
+  }
+  
+  // 默认可以短路
+  result.shortCircuit = true;
+  return result;
 }
 
 // ==========================================
@@ -266,17 +375,33 @@ function resolveChapterCount(structure?: DocStructure): StructuralQueryResolutio
       kind: 'chapter_count',
       targetLevel: 'chapter',
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有获取到文档结构信息，无法统计章节数量。',
       debugInfo: 'structure is undefined',
+    };
+  }
+  
+  // v2: 检查全局置信度
+  const globalConf = structure.globalConfidence || 'medium';
+  
+  if (globalConf === 'low') {
+    return {
+      kind: 'chapter_count',
+      targetLevel: 'chapter',
+      confidence: 'low',
+      shortCircuit: true,
+      clarificationQuestion: `系统检测到 ${structure.chapterCount} 个可能的章节，但由于文档主要通过样式标记标题（而非使用标准 Heading 格式），无法确定这个数字是否准确。建议检查文档格式或手动确认。`,
+      debugInfo: `chapterCount: ${structure.chapterCount}, globalConfidence: low`,
     };
   }
   
   return {
     kind: 'chapter_count',
     targetLevel: 'chapter',
-    confidence: 'high',
+    confidence: globalConf === 'high' ? 'high' : 'medium',
+    shortCircuit: true,
     directAnswer: `这篇文档共有 ${structure.chapterCount} 个章（大章节）。`,
-    debugInfo: `chapterCount: ${structure.chapterCount}`,
+    debugInfo: `chapterCount: ${structure.chapterCount}, globalConfidence: ${globalConf}`,
   };
 }
 
@@ -286,6 +411,7 @@ function resolveSectionCount(structure?: DocStructure): StructuralQueryResolutio
       kind: 'section_count',
       targetLevel: 'section',
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有获取到文档结构信息，无法统计小节数量。',
       debugInfo: 'structure is undefined',
     };
@@ -293,13 +419,26 @@ function resolveSectionCount(structure?: DocStructure): StructuralQueryResolutio
   
   // 小节数 = 总章节数 - 大章数
   const sectionCount = structure.totalSectionCount - structure.chapterCount;
+  const globalConf = structure.globalConfidence || 'medium';
+  
+  if (globalConf === 'low') {
+    return {
+      kind: 'section_count',
+      targetLevel: 'section',
+      confidence: 'low',
+      shortCircuit: true,
+      clarificationQuestion: `系统检测到约 ${sectionCount} 个小节，但由于文档结构识别置信度较低，无法确定准确数字。`,
+      debugInfo: `sectionCount: ${sectionCount}, globalConfidence: low`,
+    };
+  }
   
   return {
     kind: 'section_count',
     targetLevel: 'section',
-    confidence: 'high',
+    confidence: globalConf === 'high' ? 'high' : 'medium',
+    shortCircuit: true,
     directAnswer: `这篇文档共有 ${sectionCount} 个小节（不含大章节），总共 ${structure.totalSectionCount} 个章节（含大章和小节）。`,
-    debugInfo: `sectionCount: ${sectionCount}, totalSectionCount: ${structure.totalSectionCount}`,
+    debugInfo: `sectionCount: ${sectionCount}, totalSectionCount: ${structure.totalSectionCount}, globalConfidence: ${globalConf}`,
   };
 }
 
@@ -309,6 +448,7 @@ function resolveParagraphCount(stats?: import('../docContext/docContextTypes').D
       kind: 'paragraph_count',
       targetLevel: 'paragraph',
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有统计到段落数量。',
       debugInfo: 'stats.paragraphCount is undefined or 0',
     };
@@ -318,6 +458,7 @@ function resolveParagraphCount(stats?: import('../docContext/docContextTypes').D
     kind: 'paragraph_count',
     targetLevel: 'paragraph',
     confidence: 'high',
+    shortCircuit: true,
     directAnswer: `这篇文档共有 ${stats.paragraphCount} 个段落。`,
     debugInfo: `paragraphCount: ${stats.paragraphCount}`,
   };
@@ -328,6 +469,7 @@ function resolveWordCount(stats?: import('../docContext/docContextTypes').DocSta
     return {
       kind: 'word_count',
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有统计到字数信息。',
       debugInfo: 'stats.wordCount is undefined or 0',
     };
@@ -336,6 +478,7 @@ function resolveWordCount(stats?: import('../docContext/docContextTypes').DocSta
   return {
     kind: 'word_count',
     confidence: 'high',
+    shortCircuit: true,
     directAnswer: `这篇文档共有 ${stats.wordCount} 个字。`,
     debugInfo: `wordCount: ${stats.wordCount}`,
   };
@@ -346,6 +489,7 @@ function resolveCharCount(stats?: import('../docContext/docContextTypes').DocSta
     return {
       kind: 'char_count',
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有统计到字符数信息。',
       debugInfo: 'stats.charCount is undefined or 0',
     };
@@ -354,6 +498,7 @@ function resolveCharCount(stats?: import('../docContext/docContextTypes').DocSta
   return {
     kind: 'char_count',
     confidence: 'high',
+    shortCircuit: true,
     directAnswer: `这篇文档共有 ${stats.charCount} 个字符。`,
     debugInfo: `charCount: ${stats.charCount}`,
   };
@@ -364,6 +509,7 @@ function resolveTokenCount(stats?: import('../docContext/docContextTypes').DocSt
     return {
       kind: 'token_count',
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有统计到 token 数信息。',
       debugInfo: 'stats.tokenEstimate is undefined or 0',
     };
@@ -372,30 +518,60 @@ function resolveTokenCount(stats?: import('../docContext/docContextTypes').DocSt
   return {
     kind: 'token_count',
     confidence: 'high',
+    shortCircuit: true,
     directAnswer: `这篇文档大约有 ${stats.tokenEstimate} 个 token（这是系统估算值）。`,
     debugInfo: `tokenEstimate: ${stats.tokenEstimate}`,
   };
 }
 
-function resolveTitleQuery(docMeta?: import('../docContext/docContextTypes').DocMeta): StructuralQueryResolution {
+function resolveTitleQuery(docMeta?: DocMeta): StructuralQueryResolution {
   if (!docMeta || !docMeta.title) {
     return {
       kind: 'title_query',
       confidence: 'high',
+      shortCircuit: true,
       directAnswer: '当前文档没有单独标注的文档标题。',
       debugInfo: 'docMeta.title is null or undefined',
     };
   }
   
-  const note = docMeta.hasExplicitTitle 
-    ? '' 
-    : '（注：这是从第一个 H1 推断的，不是显式的文档标题）';
+  // v2: 使用 titleSource 和 titleConfidence
+  const titleConf = docMeta.titleConfidence || 'medium';
+  const titleSource = docMeta.titleSource || 'heading';
+  
+  // 构建来源说明
+  let sourceNote = '';
+  if (titleSource === 'explicit_meta') {
+    sourceNote = '';  // 显式元数据，不需要说明
+  } else if (titleSource === 'heading') {
+    sourceNote = titleConf === 'high' ? '' : '（从 H1 标题推断）';
+  } else if (titleSource === 'style_inferred') {
+    sourceNote = '（通过样式特征推断，可能不准确）';
+  } else if (titleSource === 'filename') {
+    sourceNote = '（从文件名推断）';
+  }
+  
+  // 低置信度时返回不确定提示
+  if (titleConf === 'low') {
+    const candidateInfo = docMeta.candidates && docMeta.candidates.length > 1
+      ? `\n\n其他可能的候选：\n${docMeta.candidates.slice(1, 4).map(c => `- 「${c.text}」(${c.source})`).join('\n')}`
+      : '';
+    
+    return {
+      kind: 'title_query',
+      confidence: 'low',
+      shortCircuit: true,
+      clarificationQuestion: `系统推测文档标题可能是「${docMeta.title}」${sourceNote}，但置信度较低。请确认这是否正确？${candidateInfo}`,
+      debugInfo: `title: ${docMeta.title}, source: ${titleSource}, confidence: ${titleConf}`,
+    };
+  }
   
   return {
     kind: 'title_query',
-    confidence: 'high',
-    directAnswer: `文档标题是「${docMeta.title}」${note}`,
-    debugInfo: `title: ${docMeta.title}, hasExplicitTitle: ${docMeta.hasExplicitTitle}`,
+    confidence: titleConf,
+    shortCircuit: true,
+    directAnswer: `文档标题是「${docMeta.title}」${sourceNote}`,
+    debugInfo: `title: ${docMeta.title}, source: ${titleSource}, confidence: ${titleConf}`,
   };
 }
 
@@ -406,6 +582,7 @@ function resolveNthChapter(index: number, structure?: DocStructure): StructuralQ
       targetLevel: 'chapter',
       chapterIndex: index,
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有获取到文档结构信息，无法定位章节。',
       debugInfo: 'structure is undefined',
     };
@@ -417,19 +594,42 @@ function resolveNthChapter(index: number, structure?: DocStructure): StructuralQ
       targetLevel: 'chapter',
       chapterIndex: index,
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: `文档只有 ${structure.chapters.length} 个大章节，找不到第 ${index} 章。`,
       debugInfo: `requested index ${index} out of range [1, ${structure.chapters.length}]`,
     };
   }
   
   const chapter = structure.chapters[index - 1];
+  const globalConf = structure.globalConfidence || 'medium';
+  const chapterConf = chapter.confidence || 'medium';
+  
+  // 取全局和章节置信度的较低者
+  const effectiveConf: Confidence = 
+    globalConf === 'low' || chapterConf === 'low' ? 'low' :
+    globalConf === 'medium' || chapterConf === 'medium' ? 'medium' : 'high';
+  
+  // 低置信度时返回不确定提示
+  if (effectiveConf === 'low') {
+    return {
+      kind: 'locate_chapter',
+      targetLevel: 'chapter',
+      chapterIndex: index,
+      confidence: 'low',
+      shortCircuit: true,
+      clarificationQuestion: `系统推测第 ${index} 章可能是「${chapter.titleText}」，但这个章节是通过样式推断的（${chapter.source || 'unknown'}），可能不准确。`,
+      debugInfo: `chapter: ${chapter.titleText}, source: ${chapter.source}, confidence: ${chapterConf}, globalConfidence: ${globalConf}`,
+    };
+  }
+  
   return {
     kind: 'locate_chapter',
     targetLevel: 'chapter',
     chapterIndex: index,
-    confidence: 'high',
+    confidence: effectiveConf,
+    shortCircuit: true,
     directAnswer: `第 ${index} 章的标题是「${chapter.titleText}」，共有 ${chapter.childCount} 个子章节。`,
-    debugInfo: `chapter: ${chapter.titleText}`,
+    debugInfo: `chapter: ${chapter.titleText}, source: ${chapter.source}, confidence: ${chapterConf}`,
   };
 }
 
@@ -440,6 +640,7 @@ function resolveNthSection(index: number, structure?: DocStructure): StructuralQ
       targetLevel: 'section',
       sectionIndex: index,
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: '系统没有获取到文档结构信息，无法定位小节。',
       debugInfo: 'structure is undefined',
     };
@@ -454,19 +655,41 @@ function resolveNthSection(index: number, structure?: DocStructure): StructuralQ
       targetLevel: 'section',
       sectionIndex: index,
       confidence: 'low',
+      shortCircuit: true,
       clarificationQuestion: `文档只有 ${sections.length} 个小节，找不到第 ${index} 节。请确认你要找的是哪个章节。`,
       debugInfo: `requested index ${index} out of range [1, ${sections.length}]`,
     };
   }
   
   const section = sections[index - 1];
+  const globalConf = structure.globalConfidence || 'medium';
+  const sectionConf = section.confidence || 'medium';
+  
+  // 取全局和章节置信度的较低者
+  const effectiveConf: Confidence = 
+    globalConf === 'low' || sectionConf === 'low' ? 'low' :
+    globalConf === 'medium' || sectionConf === 'medium' ? 'medium' : 'high';
+  
+  if (effectiveConf === 'low') {
+    return {
+      kind: 'locate_section',
+      targetLevel: 'section',
+      sectionIndex: index,
+      confidence: 'low',
+      shortCircuit: true,
+      clarificationQuestion: `系统推测第 ${index} 节可能是「${section.titleText}」，但识别置信度较低。`,
+      debugInfo: `section: ${section.titleText}, source: ${section.source}, confidence: ${sectionConf}`,
+    };
+  }
+  
   return {
     kind: 'locate_section',
     targetLevel: 'section',
     sectionIndex: index,
-    confidence: 'high',
+    confidence: effectiveConf,
+    shortCircuit: true,
     directAnswer: `第 ${index} 节的标题是「${section.titleText}」。`,
-    debugInfo: `section: ${section.titleText}`,
+    debugInfo: `section: ${section.titleText}, source: ${section.source}, confidence: ${sectionConf}`,
   };
 }
 
@@ -511,9 +734,18 @@ export function isStructuralQuery(resolution: StructuralQueryResolution): boolea
 
 /**
  * 判断是否可以直接回答（不需要 LLM）
+ * 
+ * @tag structure-v2 - 支持 medium confidence 的直接回答
  */
 export function canDirectAnswer(resolution: StructuralQueryResolution): boolean {
-  return resolution.confidence === 'high' && !!resolution.directAnswer;
+  // high 或 medium confidence 都可以直接回答
+  const canAnswer = (resolution.confidence === 'high' || resolution.confidence === 'medium') 
+    && !!resolution.directAnswer;
+  // 但如果 shortCircuit 明确为 false，不应直接回答
+  if (resolution.shortCircuit === false) {
+    return false;
+  }
+  return canAnswer;
 }
 
 /**
@@ -521,5 +753,34 @@ export function canDirectAnswer(resolution: StructuralQueryResolution): boolean 
  */
 export function needsClarification(resolution: StructuralQueryResolution): boolean {
   return resolution.confidence === 'low' && !!resolution.clarificationQuestion;
+}
+
+/**
+ * 判断是否应该短路（不走 LLM）
+ * 
+ * @tag structure-v2
+ */
+export function shouldShortCircuit(resolution: StructuralQueryResolution): boolean {
+  // 如果明确指定了 shortCircuit，使用它
+  if (resolution.shortCircuit !== undefined) {
+    return resolution.shortCircuit;
+  }
+  // 默认：有直接答案或澄清问题时短路
+  return canDirectAnswer(resolution) || needsClarification(resolution);
+}
+
+/**
+ * 获取置信度提示文本
+ * 
+ * @tag structure-v2
+ */
+export function getConfidenceHint(resolution: StructuralQueryResolution): string | null {
+  if (resolution.confidence === 'low') {
+    return '⚠️ 系统对此结构识别的置信度较低，结果可能不准确。';
+  }
+  if (resolution.confidence === 'medium') {
+    return 'ℹ️ 此结果基于文档结构分析，可能存在偏差。';
+  }
+  return null;
 }
 

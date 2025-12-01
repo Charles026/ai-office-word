@@ -257,6 +257,63 @@ export interface CustomOp {
   meta: DocOpMeta;
 }
 
+// ==========================================
+// InlineMark 相关操作
+// ==========================================
+
+import type { InlineMark, InlineMarkKind } from '../document/inlineMark';
+
+/**
+ * 应用内联标记
+ * 
+ * 在指定的 TextAnchor 位置添加内联标记。
+ * 标记不改变文本内容，只影响展示样式。
+ */
+export interface ApplyInlineMarkOp {
+  type: 'ApplyInlineMark';
+  payload: {
+    /** 要应用的标记（包含 TextAnchor + kind + style 等） */
+    mark: InlineMark;
+  };
+  meta: DocOpMeta;
+}
+
+/**
+ * 移除内联标记
+ * 
+ * 根据标记 ID 移除指定的内联标记。
+ */
+export interface RemoveInlineMarkOp {
+  type: 'RemoveInlineMark';
+  payload: {
+    /** 要移除的标记 ID */
+    markId: string;
+  };
+  meta: DocOpMeta;
+}
+
+/**
+ * 清除内联标记范围
+ */
+export type ClearInlineMarksScope =
+  | { type: 'document' }                    // 清除整篇文档的所有标记
+  | { type: 'section'; sectionId: string }  // 清除某个 section 的所有标记
+  | { type: 'kind'; kind: InlineMarkKind }; // 清除某一类标记
+
+/**
+ * 清除内联标记
+ * 
+ * 根据指定的范围清除内联标记。
+ */
+export interface ClearInlineMarksOp {
+  type: 'ClearInlineMarks';
+  payload: {
+    /** 清除范围 */
+    scope: ClearInlineMarksScope;
+  };
+  meta: DocOpMeta;
+}
+
 /**
  * 所有 DocOp 的联合类型
  */
@@ -273,7 +330,10 @@ export type DocOp =
   | SplitBlockOp
   | InsertLineBreakOp
   | ReplaceBlockTextOp
-  | CustomOp;
+  | CustomOp
+  | ApplyInlineMarkOp
+  | RemoveInlineMarkOp
+  | ClearInlineMarksOp;
 
 /**
  * DocOp 类型字符串
