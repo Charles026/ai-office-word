@@ -35,6 +35,7 @@ import {
   buildRewriteSectionIntent,
   buildSummarizeSectionIntent,
   buildExpandSectionIntent,
+  buildHighlightOnlyIntent,
   assignIntentId,
 } from '../runtime/intents';
 import type {
@@ -70,6 +71,11 @@ import type {
 } from '../ai/intent/intentTypes';
 import { parseDocOpsPlan, validateDocOpsPlan } from '../ai/docops/docOpsSchema';
 import type { DocOpsPlan } from '../ai/docops/docOpsTypes';
+import {
+  executeHighlightTasks,
+  hasHighlightTasks,
+  filterHighlightTasks,
+} from './highlightExecution';
 
 // ==========================================
 // 类型定义
@@ -78,18 +84,32 @@ import type { DocOpsPlan } from '../ai/docops/docOpsTypes';
 /**
  * Section AI 操作类型
  */
-export type SectionAiAction = 'rewrite' | 'summarize' | 'expand';
+export type SectionAiAction = 'rewrite' | 'summarize' | 'expand' | 'highlight';
+
+/**
+ * 高亮选项
+ */
+export interface HighlightSectionOptions {
+  /** 高亮模式 */
+  mode?: 'terms' | 'sentences' | 'auto';
+  /** 词语数量 */
+  termCount?: number;
+  /** 样式 */
+  style?: 'default' | 'bold' | 'underline' | 'background';
+}
 
 /**
  * Section AI 操作选项
  */
 export interface SectionAiOptions {
   /** 重写选项 */
-  rewrite?: RewriteSectionOptions;
+  rewrite?: RewriteSectionOptions & { enabled?: boolean };
   /** 总结选项 */
   summarize?: SummarizeSectionOptions;
   /** 扩写选项 */
   expand?: ExpandSectionOptions;
+  /** 高亮选项 */
+  highlight?: HighlightSectionOptions;
 }
 
 /**
@@ -189,6 +209,7 @@ function getActionLabel(action: SectionAiAction): string {
     rewrite: '重写',
     summarize: '总结',
     expand: '扩写',
+    highlight: '标记重点',
   };
   return labels[action];
 }
@@ -201,6 +222,7 @@ function getSuccessMessage(action: SectionAiAction): string {
     rewrite: '章节已重写',
     summarize: '章节已总结',
     expand: '章节已扩写',
+    highlight: '重点已标记',
   };
   return messages[action];
 }
@@ -258,10 +280,10 @@ class LlmParseError extends Error {
 }
 
 interface ParsedSectionAiProtocol {
-  assistantText: string;
-  intent: CanonicalIntent;
+  assistantText?: string;
+  canonicalIntent: CanonicalIntent;
   docOpsPlan: DocOpsPlan;
-  paragraphs: LlmParagraphOutput[];
+  paragraphs?: LlmParagraphOutput[];
 }
 
 function extractParagraphsFromPlan(plan: DocOpsPlan): LlmParagraphOutput[] {
@@ -303,6 +325,77 @@ function stripMarkdownCodeBlock(text: string): string {
   result = result.replace(/\n?```\s*$/m, '');
   
   return result.trim();
+}
+
+/**
+ * 🆕 Intent-only 解析器（用于 highlight_section 等不需要 docops 的 agent）
+ * 
+ * 只解析 [assistant] 和 [intent]，不要求 [docops]
+ */
+function parseIntentOnlyResponse(text: string): ParsedSectionAiProtocol {
+  const rawSnippet = text.slice(0, 400);
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  const intentMarker = '[intent]';
+  const docopsMarker = '[docops]';
+
+  const intentIndex = lower.indexOf(intentMarker);
+  const docopsIndex = lower.indexOf(docopsMarker);
+
+  // 只要求有 [intent]，[docops] 是可选的
+  if (intentIndex === -1) {
+    throw new LlmParseError(
+      'AI 返回缺少 [intent] 模块',
+      rawSnippet,
+      'Expected blocks: [assistant] [intent]'
+    );
+  }
+
+  const assistantSegment = trimmed
+    .slice(0, intentIndex)
+    .replace(/^\s*\[assistant\]\s*/i, '')
+    .trim();
+  
+  // 如果有 [docops]，只取到 [docops] 之前；否则取到末尾
+  const intentEndIndex = docopsIndex > intentIndex ? docopsIndex : trimmed.length;
+  const intentSegment = stripMarkdownCodeBlock(
+    trimmed.slice(intentIndex + intentMarker.length, intentEndIndex)
+  );
+
+  if (!intentSegment) {
+    throw new LlmParseError('AI 返回的 [intent] 内容为空', rawSnippet);
+  }
+
+  let canonicalIntent: CanonicalIntent;
+  try {
+    const intentJson = JSON.parse(intentSegment);
+    canonicalIntent = parseCanonicalIntent(intentJson);
+  } catch (error) {
+    const errorDetail = error instanceof Error ? error.message : String(error);
+    const errorCause = error instanceof IntentParseError ? error.cause : undefined;
+    
+    console.error('[SectionAI] Intent-only parse error:', {
+      errorDetail,
+      errorCause: JSON.stringify(errorCause, null, 2),
+      intentSegmentPreview: intentSegment.slice(0, 300),
+    });
+    throw new LlmParseError(
+      '解析 CanonicalIntent 失败',
+      intentSegment.slice(0, 200),
+      `${errorDetail} ${errorCause ? JSON.stringify(errorCause) : ''}`
+    );
+  }
+
+  // 返回空的 docOpsPlan（intent-only 模式不需要 docops）
+  return {
+    assistantText: assistantSegment || undefined,
+    canonicalIntent,
+    docOpsPlan: { 
+      version: '1.0',
+      intentId: canonicalIntent.intentId,
+      ops: [] 
+    },
+  };
 }
 
 function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
@@ -410,7 +503,7 @@ function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
 
   return {
     assistantText: assistantSegment,
-    intent: canonicalIntent,
+    canonicalIntent,
     docOpsPlan,
     paragraphs,
   };
@@ -604,6 +697,10 @@ export async function runSectionAiAction(
       case 'expand':
         intentBody = buildExpandSectionIntent(sectionContext, options?.expand);
         break;
+      case 'highlight':
+        // 🆕 只高亮，不改写
+        intentBody = buildHighlightOnlyIntent(sectionContext, options?.highlight);
+        break;
       default:
         throw new Error(`不支持的操作类型: ${action}`);
     }
@@ -668,9 +765,16 @@ export async function runSectionAiAction(
     }
 
     // 5. 解析结构化输出（会抛出 LlmParseError）
+    // 🆕 highlight action 使用 intent-only 解析器（不要求 docops）
+    const isIntentOnly = action === 'highlight';
     let protocolOutput: ParsedSectionAiProtocol | null = null;
     try {
-      protocolOutput = parseStructuredLlmResponse(llmResponse.text);
+      if (isIntentOnly) {
+        console.log('[SectionAI] Using intent-only parser for highlight action');
+        protocolOutput = parseIntentOnlyResponse(llmResponse.text);
+      } else {
+        protocolOutput = parseStructuredLlmResponse(llmResponse.text);
+      }
     } catch (parseError) {
       if (parseError instanceof LlmParseError) {
         console.error('[SectionAI] LLM parse error:', {
@@ -690,12 +794,12 @@ export async function runSectionAiAction(
     const __DEV__ = process.env.NODE_ENV === 'development';
     
     if (__DEV__) {
-      console.debug('[SectionAI] Parsed CanonicalIntent:', protocolOutput.intent);
+      console.debug('[SectionAI] Parsed CanonicalIntent:', protocolOutput.canonicalIntent);
       console.debug('[SectionAI] Parsed DocOpsPlan ops:', protocolOutput.docOpsPlan.ops.length);
     }
 
     if (__DEV_SNAPSHOT__ && debugSnapshot) {
-      debugSnapshot.canonicalIntent = protocolOutput.intent;
+      debugSnapshot.canonicalIntent = protocolOutput.canonicalIntent;
       debugSnapshot.docOpsPlan = protocolOutput.docOpsPlan;
       debugSnapshot.assistantResponse = protocolOutput.assistantText;
       if (protocolOutput.assistantText) {
@@ -713,9 +817,9 @@ export async function runSectionAiAction(
     }
 
     // 5.1 🆕 提取 v2 字段：responseMode / confidence / uncertainties
-    const responseMode: CopilotResponseMode = protocolOutput.intent.responseMode ?? 'auto_apply';
-    const confidence = protocolOutput.intent.confidence;
-    const uncertainties = protocolOutput.intent.uncertainties;
+    const responseMode: CopilotResponseMode = protocolOutput.canonicalIntent.responseMode ?? 'auto_apply';
+    const confidence = protocolOutput.canonicalIntent.confidence;
+    const uncertainties = protocolOutput.canonicalIntent.uncertainties;
 
     if (__DEV__) {
       console.debug('[SectionAI] v2 Protocol:', {
@@ -729,7 +833,7 @@ export async function runSectionAiAction(
     const activeDocIdForLog = copilotStore.getContext().docId;
     if (activeDocIdForLog) {
       logAiIntentGenerated(activeDocIdForLog, sectionId, {
-        intentId: protocolOutput.intent.intentId,
+        intentId: protocolOutput.canonicalIntent.intentId,
         responseMode,
         confidence,
         uncertaintiesCount: uncertainties?.length,
@@ -748,7 +852,7 @@ export async function runSectionAiAction(
 
       return {
         success: true,
-        intent: protocolOutput.intent,
+        intent: protocolOutput.canonicalIntent,
         docOpsPlan: protocolOutput.docOpsPlan,
         assistantText: protocolOutput.assistantText,
         responseMode: 'clarify',
@@ -758,6 +862,25 @@ export async function runSectionAiAction(
       };
     }
     
+    // 🆕 highlight action 只需要返回 intent，不需要处理段落
+    if (action === 'highlight') {
+      console.log('[SectionAI] Highlight action - returning intent only (no paragraph processing)');
+      dismissToast(loadingToastId);
+      addToast('已识别重点词语', 'success');
+      commitSnapshot();
+      
+      return {
+        success: true,
+        intent: protocolOutput.canonicalIntent,
+        docOpsPlan: protocolOutput.docOpsPlan,
+        assistantText: protocolOutput.assistantText,
+        responseMode: 'auto_apply',
+        confidence,
+        uncertainties,
+        applied: false,
+      };
+    }
+
     // 6. 根据 scope 选择目标段落
     // rewrite 时根据 scope 选择 own 或 subtree；其他操作使用 own
     const rewriteScope: SectionScope = options?.rewrite?.scope ?? 'intro';
@@ -767,7 +890,7 @@ export async function runSectionAiAction(
         : sectionContext.ownParagraphs;
     
     const oldCount = targetParagraphs.length;
-    const newCount = protocolOutput.paragraphs.length;
+    const newCount = protocolOutput.paragraphs?.length ?? 0;
     
     if (__DEV__) {
       console.debug('[SectionAI] scope=', rewriteScope, 'oldCount=', oldCount, 'newCount=', newCount);
@@ -776,7 +899,7 @@ export async function runSectionAiAction(
     console.log('[SectionAI] Parsed output:', newCount, 'paragraphs');
 
     // 7. 根据操作类型处理段落
-    let finalParagraphs = protocolOutput.paragraphs;
+    let finalParagraphs = protocolOutput.paragraphs ?? [];
     
     if (action === 'rewrite') {
       // rewrite_section: 使用修复层确保段落数量一致
@@ -810,7 +933,7 @@ export async function runSectionAiAction(
       // summarize_section: 截取过多的段落
       if (newCount > oldCount) {
         console.warn(`[SectionAI] Summarize returned more paragraphs than original: ${newCount} > ${oldCount}`);
-        finalParagraphs = protocolOutput.paragraphs.slice(0, oldCount);
+        finalParagraphs = (protocolOutput.paragraphs ?? []).slice(0, oldCount);
         console.warn(`[SectionAI] Truncated to ${oldCount} paragraphs`);
       }
     }
@@ -846,7 +969,7 @@ export async function runSectionAiAction(
       return {
         success: true,
         docOps,
-        intent: protocolOutput.intent,
+        intent: protocolOutput.canonicalIntent,
         docOpsPlan: protocolOutput.docOpsPlan,
         assistantText: protocolOutput.assistantText,
         responseMode: 'preview',
@@ -894,7 +1017,7 @@ export async function runSectionAiAction(
     return { 
       success: true, 
       docOps,
-      intent: protocolOutput.intent,
+      intent: protocolOutput.canonicalIntent,
       docOpsPlan: protocolOutput.docOpsPlan,
       assistantText: protocolOutput.assistantText,
       responseMode: 'auto_apply',
@@ -998,6 +1121,27 @@ export async function applyPendingDocOps(
         });
       } else if (tasks.some(t => t.type === 'summarize')) {
         logAiSummaryApplied(activeDocId, sectionId);
+      }
+      
+      // 执行高亮任务（mark_key_terms / mark_key_sentences / mark_key_paragraphs）
+      if (hasHighlightTasks(tasks)) {
+        const highlightTasks = filterHighlightTasks(tasks);
+        const highlightResult = executeHighlightTasks(editor, highlightTasks, sectionId);
+        
+        if (highlightResult.marks.length > 0) {
+          console.log('[SectionAI] Highlight tasks executed:', {
+            marksCreated: highlightResult.marks.length,
+            skipped: highlightResult.skipped.length,
+          });
+          
+          // TODO: 将 highlightResult.ops 应用到 DocumentEngine
+          // 目前 InlineMark 状态管理还未完全集成，先记录日志
+          console.log('[SectionAI] InlineMark ops generated:', highlightResult.ops.length);
+        }
+        
+        if (highlightResult.skipped.length > 0) {
+          console.warn('[SectionAI] Some highlight targets were skipped:', highlightResult.skipped);
+        }
       }
     }
     

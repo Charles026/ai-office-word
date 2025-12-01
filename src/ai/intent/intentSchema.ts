@@ -113,6 +113,99 @@ const highlightTermsTaskSchema = z.object({
   }).passthrough().default({}),
 }).passthrough();
 
+/**
+ * mark_key_terms 任务 schema
+ * 
+ * 用于 InlineMark 流程的词语级标注
+ * 
+ * 【设计原则】
+ * - LLM 必须提供 terms 列表
+ * - style 由 LLM 根据用户意图决定（如「加粗」→ 'bold'）
+ */
+const markKeyTermsTaskSchema = z.object({
+  type: z.literal('mark_key_terms'),
+  params: z.object({
+    sectionId: z.string().min(1).optional(),
+    targets: z.array(
+      z.object({
+        sectionId: z.string().min(1).optional(),
+        phrase: z.string().min(1),
+        occurrence: z.number().int().positive().optional(),
+      }).passthrough()
+    ).optional(),
+    terms: z.array(
+      z.object({
+        phrase: z.string().min(1),
+        occurrence: z.number().int().positive().optional(),
+      }).passthrough()
+    ).optional(),
+    maxTerms: z.number().int().positive().optional(),
+    // 高亮样式（由 LLM 根据用户意图决定）
+    style: z.enum(['default', 'bold', 'underline', 'background']).optional(),
+  }).passthrough().default({}),
+}).passthrough();
+
+/**
+ * mark_key_sentences 任务 schema
+ * 
+ * 用于句子级高亮
+ */
+const markKeySentencesTaskSchema = z.object({
+  type: z.literal('mark_key_sentences'),
+  params: z.object({
+    sectionId: z.string().min(1).optional(),
+    sentenceIndexes: z.array(z.number().int().nonnegative()).optional(),
+    sentences: z.array(
+      z.object({
+        text: z.string().min(1),
+        paragraphIndex: z.number().int().nonnegative().optional(),
+      }).passthrough()
+    ).optional(),
+    maxSentences: z.number().int().positive().optional(),
+  }).passthrough().default({}),
+}).passthrough();
+
+/**
+ * mark_key_paragraphs 任务 schema
+ * 
+ * 用于段落级高亮（预留）
+ */
+const markKeyParagraphsTaskSchema = z.object({
+  type: z.literal('mark_key_paragraphs'),
+  params: z.object({
+    sectionId: z.string().min(1).optional(),
+    paragraphIndexes: z.array(z.number().int().nonnegative()).optional(),
+    maxParagraphs: z.number().int().positive().optional(),
+  }).passthrough().default({}),
+}).passthrough();
+
+/**
+ * highlight_spans 任务 schema
+ * 
+ * 🆕 通用高亮任务，替代 mark_key_terms / mark_key_sentences
+ * Runtime 会将旧格式 normalize 为此格式
+ */
+const highlightSpansTaskSchema = z.object({
+  type: z.literal('highlight_spans'),
+  params: z.object({
+    sectionId: z.string().min(1).optional(),
+    target: z.enum(['key_terms', 'key_sentences', 'risks', 'metrics', 'custom']),
+    style: z.enum(['default', 'bold', 'underline', 'background']).optional(),
+    terms: z.array(
+      z.object({
+        phrase: z.string().min(1),
+        occurrence: z.number().int().positive().optional(),
+      }).passthrough()
+    ).optional(),
+    sentences: z.array(
+      z.object({
+        text: z.string().min(1),
+        paragraphIndex: z.number().int().nonnegative().optional(),
+      }).passthrough()
+    ).optional(),
+  }).passthrough(),
+}).passthrough();
+
 const insertBlockTaskSchema = z.object({
   type: z.literal('insert_block'),
   params: z.object({
@@ -135,6 +228,10 @@ const intentTaskSchema = z.discriminatedUnion('type', [
   translateTaskSchema,
   summarizeTaskSchema,
   highlightTermsTaskSchema,
+  markKeyTermsTaskSchema,
+  markKeySentencesTaskSchema,
+  markKeyParagraphsTaskSchema,
+  highlightSpansTaskSchema,  // 🆕 通用高亮任务
   insertBlockTaskSchema,
   addCommentTaskSchema,
 ]) as z.ZodType<IntentTask>;

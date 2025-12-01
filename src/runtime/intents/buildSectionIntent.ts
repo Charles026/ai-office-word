@@ -291,6 +291,74 @@ export function buildExpandSectionIntent(
 }
 
 // ==========================================
+// Highlight Only Intent Builder
+// ==========================================
+
+/**
+ * buildHighlightOnlyIntent 的选项
+ */
+export interface HighlightOnlyOptions {
+  /** 高亮模式 */
+  mode?: 'terms' | 'sentences' | 'auto';
+  /** 词语数量 */
+  termCount?: number;
+  /** 样式 */
+  style?: 'default' | 'bold' | 'underline' | 'background';
+}
+
+/**
+ * 构建只高亮（不改写）的 Intent
+ * 
+ * @param context - Section 上下文
+ * @param options - 高亮选项
+ * @returns IntentWithoutId
+ */
+export function buildHighlightOnlyIntent(
+  context: SectionContext,
+  options?: HighlightOnlyOptions
+): IntentWithoutId {
+  validateSectionContext(context, 'buildHighlightOnlyIntent');
+
+  const intentOptions: AgentIntentOptions = {
+    // 🆕 明确标记：只高亮，不改写
+    highlightMode: options?.mode ?? 'terms',
+  };
+  
+  if (options?.termCount) {
+    intentOptions.termCount = options.termCount;
+  }
+  
+  // 自定义 prompt 明确告诉 LLM 只做高亮
+  intentOptions.customPrompt = `只标记重点词语/句子，不要改写文本内容。返回 mark_key_terms 任务，包含 3-5 个重点词语。${
+    options?.style === 'bold' ? '样式设置为 bold。' : ''
+  }`;
+
+  const intent: IntentWithoutId = {
+    kind: 'highlight_section', // 新的 intent kind
+    source: 'section',
+    locale: 'auto',
+    options: intentOptions,
+    metadata: {
+      sectionId: context.sectionId,
+      sectionLevel: context.level,
+      createdAt: Date.now(),
+      highlightOnly: true, // 标记为只高亮
+    },
+  };
+
+  if (__DEV__) {
+    console.debug('[buildHighlightOnlyIntent]', {
+      sectionId: context.sectionId,
+      level: context.level,
+      mode: options?.mode,
+      style: options?.style,
+    });
+  }
+
+  return intent;
+}
+
+// ==========================================
 // 预留：未来扩展的 Intent Builder
 // ==========================================
 

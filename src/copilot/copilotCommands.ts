@@ -43,13 +43,20 @@ export type CopilotCommand =
   // 复合命令（DocEditPlan）
   | 'rewrite_section_with_highlight'  // 改写 + 标记重点
   | 'rewrite_section_with_highlight_and_summary'  // 改写 + 标记重点 + 摘要
+  // 独立高亮命令（只高亮，不改写）
+  | 'highlight_key_terms'  // 只标记重点词语（Primitive: HighlightKeyTerms）
   // 文档级命令
   | 'summarize_document';
 
 /**
  * 粗类枚举 - 用于规则层粗分类和 LLM Router 辅助
+ * 
+ * 【设计原则】
+ * - 只做「非常粗」的意图分类，例如 rewrite / summarize / expand / translate
+ * - 不在 rules 层决定：高亮/加粗、词语还是句子、样式等细节
+ * - 这些细节由 CanonicalIntent LLM 来理解
  */
-export type RoughKind = 'rewrite' | 'summarize' | 'translate' | 'expand' | 'unknown';
+export type RoughKind = 'rewrite' | 'summarize' | 'translate' | 'expand' | 'highlight' | 'unknown';
 
 /**
  * 命令解析结果
@@ -96,6 +103,7 @@ export const COMMAND_LABELS: Record<CopilotCommand, string> = {
   expand_section: '扩写章节',
   rewrite_section_with_highlight: '改写并标记重点',
   rewrite_section_with_highlight_and_summary: '改写、标记重点并生成摘要',
+  highlight_key_terms: '标记重点词语', // 独立高亮命令
   summarize_document: '总结文档',
 };
 
@@ -110,6 +118,7 @@ export function commandNeedsSection(command: CopilotCommand): boolean {
     'expand_section',
     'rewrite_section_with_highlight',
     'rewrite_section_with_highlight_and_summary',
+    'highlight_key_terms', // 独立高亮命令
   ].includes(command);
 }
 
@@ -136,6 +145,7 @@ export function isCommandImplemented(command: CopilotCommand): boolean {
     'expand_section',
     'rewrite_section_with_highlight', // 改写 + 标记重点
     'rewrite_section_with_highlight_and_summary', // 改写 + 标记重点 + 摘要
+    'highlight_key_terms', // 独立高亮命令（Primitive: HighlightKeyTerms）
   ].includes(command);
 }
 
@@ -159,6 +169,23 @@ interface MatchRule {
  * 复合意图关键词（标记重点、摘要等）
  */
 const HIGHLIGHT_KEYWORDS = ['标记重点', '加粗重点', '高亮', '标记', '重点', 'highlight', 'mark key', 'bold'];
+const HIGHLIGHT_ONLY_KEYWORDS = [
+  '标记重点词语',
+  '标记重点单词',
+  '重点词语',
+  '重点单词',
+  '关键词',
+  '关键字',
+  '高亮一下',
+  '标粗',
+  '加粗',
+  'bold',
+  'highlight key terms',
+  'mark key terms',
+];
+const REWRITE_KEYWORDS_FOR_INTENT = [
+  '重写', '改写', '润色', '优化', 'rewrite', 'polish', 'make it better', 'make it clearer', '更好', '更正式',
+];
 const SUMMARY_KEYWORDS = ['生成摘要', '加摘要', '添加摘要', '总结要点', 'add summary', 'bullet summary', 'bullet'];
 
 /**
@@ -166,6 +193,16 @@ const SUMMARY_KEYWORDS = ['生成摘要', '加摘要', '添加摘要', '总结�
  */
 function hasHighlightIntent(text: string): boolean {
   return HIGHLIGHT_KEYWORDS.some(kw => text.includes(kw));
+}
+
+function hasRewriteIntent(text: string): boolean {
+  return REWRITE_KEYWORDS_FOR_INTENT.some(kw => text.includes(kw.toLowerCase()));
+}
+
+function isHighlightOnlyIntent(text: string): boolean {
+  const normalized = text.toLowerCase();
+  const hasHighlight = HIGHLIGHT_ONLY_KEYWORDS.some(kw => normalized.includes(kw.toLowerCase()));
+  return hasHighlight && !hasRewriteIntent(normalized);
 }
 
 /**
@@ -250,6 +287,21 @@ export function resolveCopilotCommand(
 
   // 1. 标准化文本
   const text = userText.toLowerCase();
+
+  // 1.1 只标记/高亮意图（无改写）
+  if (isHighlightOnlyIntent(text) && context.sectionId && context.docId) {
+    return {
+      command: 'highlight_key_terms',
+      scope: 'section',
+      docId: context.docId,
+      sectionId: context.sectionId,
+      sectionTitle: context.sectionTitle,
+      options: {
+        highlightOnly: true,
+        originalInput: userText,
+      },
+    };
+  }
 
   // 2. 尝试 Refinement 解析（优先处理连续对话）
   // 如果当前没有明确的 section 焦点（scope !== 'section'），
@@ -502,12 +554,18 @@ export function buildNotImplementedMessage(command: CopilotCommand): string {
 
 /**
  * 粗类关键词映射
+ * 
+ * 【设计原则】
+ * - 只做「非常粗」的意图分类
+ * - 不匹配「高亮/加粗/重点词语/重点单词」这些细节词汇
+ * - 这些细节由 CanonicalIntent LLM 来理解用户意图
  */
 const ROUGH_KIND_KEYWORDS: Record<Exclude<RoughKind, 'unknown'>, string[]> = {
   summarize: ['总结', '概括', '总结一下', '总结本节', 'summary', 'summarize', 'summarise'],
   translate: ['翻译', '译成', '英文', '中文', 'translate', 'into english', 'into chinese', '翻成'],
-  rewrite: ['重写', '改写', '润色', '优化', 'polish', 'rewrite', 'make it better', 'make it clearer', '更好', '更正式', '更简洁', '专业', '正式'],
+  rewrite: ['重写', '改写', '润色', '优化', 'polish', 'rewrite', 'make it better', 'make it clearer'],
   expand: ['扩写', '展开', '详细一点', '写多一点', 'expand', 'add more detail', 'elaborate', '更详细'],
+  highlight: ['标记', '高亮', '加粗', 'bold', 'highlight', 'mark'],
 };
 
 /**
@@ -713,6 +771,27 @@ export function resolveCopilotCommandByRules(
       };
     }
     // 翻译通常需要选区，没有选区时返回 null
+    return null;
+  }
+
+  // 2.5 Highlight (标记/高亮/加粗等) → 只高亮，不改写
+  if (roughKind === 'highlight') {
+    if ((scope === 'section' || scope === 'document') && sectionId) {
+      if (__DEV__) console.log('[Rules] 纯高亮意图 → highlight_key_terms（无改写）');
+      return {
+        command: 'highlight_key_terms', // 🆕 只高亮，不改写
+        scope: 'section',
+        docId,
+        sectionId,
+        sectionTitle,
+        options: {
+          highlightOnly: true, // 明确标记：只高亮
+          letLLMDecide: true,  // 让 LLM 决定具体 terms 和 style
+        },
+        confidence: 'high',
+        roughKind,
+      };
+    }
     return null;
   }
 

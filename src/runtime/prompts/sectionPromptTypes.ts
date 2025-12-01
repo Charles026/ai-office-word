@@ -118,5 +118,5 @@ export interface SimplifiedSection {
 /**
  * Prompt 构建模式
  */
-export type PromptMode = 'rewrite' | 'summarize' | 'expand';
+export type PromptMode = 'rewrite' | 'summarize' | 'expand' | 'highlight';
 

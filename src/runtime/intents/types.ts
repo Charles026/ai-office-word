@@ -28,6 +28,7 @@ export type AgentKind =
   | 'rewrite_section'      // 重写 section
   | 'summarize_section'    // 总结 section
   | 'expand_section'       // 扩写 section
+  | 'highlight_section'    // 🆕 只高亮 section（不改写）
   
   // ========== 选区级操作 ==========
   | 'rewrite'              // 重写选区
@@ -112,6 +113,18 @@ export type TranslateDirection = 'en_to_zh' | 'zh_to_en';
 export type SectionScope = 'intro' | 'chapter';
 
 /**
+ * 高亮模式
+ * 
+ * 控制 Section AI 使用哪种粒度的高亮
+ * - 'none': 不高亮
+ * - 'terms': 只高亮词语/短语
+ * - 'sentences': 只高亮句子
+ * - 'paragraphs': 只高亮段落（预留）
+ * - 'auto': 让模型根据内容选择（可同时用多种）
+ */
+export type HighlightMode = 'none' | 'terms' | 'sentences' | 'paragraphs' | 'auto';
+
+/**
  * Agent 操作选项
  * 
  * 包含各种 action 的可选参数
@@ -145,6 +158,18 @@ export interface AgentIntentOptions {
   translateDirection?: TranslateDirection;
   /** 目标语言 */
   targetLang?: 'en' | 'zh';
+  
+  // ========== 高亮参数 ==========
+  /**
+   * 高亮模式
+   * 
+   * - 'none': 不高亮（默认）
+   * - 'terms': 只高亮词语/短语
+   * - 'sentences': 只高亮句子
+   * - 'paragraphs': 只高亮段落（预留）
+   * - 'auto': 让模型根据内容选择（可同时用多种）
+   */
+  highlightMode?: HighlightMode;
   
   // ========== 通用参数 ==========
   /** 自定义提示词 */
@@ -182,6 +207,8 @@ export interface AgentIntentMetadata {
   docId?: string;
   /** 创建时间戳 */
   createdAt?: number;
+  /** 是否只高亮（不改写） */
+  highlightOnly?: boolean;
 }
 
 /**

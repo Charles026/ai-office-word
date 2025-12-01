@@ -85,7 +85,6 @@ export {
 export {
   runDocEditPlan,
   validatePlanForExecution,
-  testComplexIntentExecution,
   type DocEditPlanResult,
   type StepResult,
 } from './docAgentRuntime';

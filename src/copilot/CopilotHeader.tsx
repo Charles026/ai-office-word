@@ -12,7 +12,7 @@
 import React, { useState } from 'react';
 import { CopilotContext, CopilotScope } from './copilotTypes';
 import { Icon } from '../components/Icon';
-import { testComplexIntentExecution } from '../docAgent';
+// testComplexIntentExecution 已移除，测试功能暂时禁用
 import { CopilotInspector } from './CopilotInspector';
 
 // ==========================================
@@ -115,14 +115,9 @@ export const CopilotHeader: React.FC<CopilotHeaderProps> = ({
     });
 
     try {
-      const result = await testComplexIntentExecution(context.docId, context.sectionId);
-      console.log('[Test] Result:', result);
-
-      if (result.success) {
-        alert(`✅ 测试成功！\n\n完成了 ${result.completedSteps}/${result.totalSteps} 个步骤：\n${result.stepResults?.map(s => `• ${s.type}: ${s.durationMs}ms`).join('\n')}`);
-      } else {
-        alert(`❌ 测试失败\n\n错误: ${result.error}`);
-      }
+      // TODO: 重新实现测试功能
+      console.log('[Test] testComplexIntentExecution 已移除，测试功能暂时禁用');
+      alert('测试功能暂时禁用，请使用 Copilot 面板测试');
     } catch (error) {
       console.error('[Test] Error:', error);
       alert(`❌ 测试出错：${error instanceof Error ? error.message : String(error)}`);

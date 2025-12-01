@@ -1,14 +1,14 @@
 /**
- * DocEdit Plan 构建器（v2）
+ * DocEdit Plan 构建器（v3 - Primitive 重构）
  * 
  * 【职责】
- * - 把高层 Intent 转成具体 DocEditPlan
+ * - 把高层 Intent 转成 Primitive 组合的 DocEditPlan
  * - 纯函数：不调用 LLM，不修改全局状态
  * 
- * 【v2 重构】
- * - 不再根据 intent.kind 分支
- * - 改为根据 rewrite/highlight/summary 子对象的 enabled 状态组合 Plan
- * - 支持旧版 kind 的向后兼容
+ * 【v3 Primitive 重构】
+ * - 每个 step 明确对应一个 DocAgent Primitive
+ * - Plan 是 primitive 的有序组合
+ * - 所有命令都是 primitive 的组合（如 rewrite_section_with_highlight = RewriteSection + HighlightKeyTerms）
  */
 
 import {
@@ -23,6 +23,7 @@ import {
   generateIntentId,
   isLegacyIntentKind,
   INTENT_DEFAULTS,
+  DocAgentPrimitive,
   type HighlightMode,
 } from './docEditTypes';
 import { SectionContext } from '../runtime/context/types';
@@ -238,10 +239,13 @@ export function buildDocEditPlanForIntent(
   // 2. 根据开关组合 Steps
   const steps: DocEditPlanStep[] = [];
 
-  // Step 1: Rewrite（如果启用）
+  // ==========================================
+  // Primitive 1: RewriteSection（如果启用）
+  // ==========================================
   if (normalized.rewrite.enabled) {
     const rewriteStep: RewriteSectionStep = {
       type: 'rewrite_section',
+      primitive: DocAgentPrimitive.RewriteSection,
       target: { sectionId: normalized.target.sectionId },
       options: {
         tone: normalized.rewrite.tone,
@@ -250,17 +254,23 @@ export function buildDocEditPlanForIntent(
       },
     };
     steps.push(rewriteStep);
+    
+    if (__DEV__) {
+      console.log('[DocEditPlanner] Added primitive: RewriteSection');
+    }
   }
 
-  // Step 2: Highlight（如果启用）
-  // 🆕 根据 mode 选择标句子还是词语
+  // ==========================================
+  // Primitive 2/3: Highlight（如果启用）
+  // ==========================================
   if (normalized.highlight.enabled) {
     const mode = normalized.highlight.mode ?? 'sentences';
     
     if (mode === 'sentences') {
-      // 只标句子
+      // Primitive: HighlightKeySentences
       const highlightStep: MarkKeySentencesStep = {
         type: 'mark_key_sentences',
+        primitive: DocAgentPrimitive.HighlightKeySentences,
         target: { sectionId: normalized.target.sectionId },
         options: {
           highlightCount: normalized.highlight.highlightCount,
@@ -268,22 +278,37 @@ export function buildDocEditPlanForIntent(
         },
       };
       steps.push(highlightStep);
+      
+      if (__DEV__) {
+        console.log('[DocEditPlanner] Added primitive: HighlightKeySentences');
+      }
     } else if (mode === 'terms') {
-      // 只标词语
+      // Primitive: HighlightKeyTerms
+      // 🆕 默认 style 为 'bold'，除非 intent 里明确指定了其他样式
+      const highlightStyle = normalized.highlight.style ?? 'bold';
       const termsStep: MarkKeyTermsStep = {
         type: 'mark_key_terms',
+        primitive: DocAgentPrimitive.HighlightKeyTerms,
         target: { sectionId: normalized.target.sectionId },
+        // terms 将在执行时从 CanonicalIntent 或 fallback 填充
+        terms: undefined,
         options: {
           termCount: normalized.highlight.termCount ?? INTENT_DEFAULTS.highlight.termCount,
           maxTermLength: 20,
-          style: normalized.highlight.style,
+          markKind: 'key_term',
+          style: highlightStyle, // 🆕 传递样式
         },
       };
       steps.push(termsStep);
+      
+      if (__DEV__) {
+        console.log('[DocEditPlanner] Added primitive: HighlightKeyTerms');
+      }
     } else if (mode === 'mixed') {
-      // 混合：先标 1-2 句关键句，再标 3-4 个关键词
+      // 混合：HighlightKeySentences + HighlightKeyTerms
       const sentenceStep: MarkKeySentencesStep = {
         type: 'mark_key_sentences',
+        primitive: DocAgentPrimitive.HighlightKeySentences,
         target: { sectionId: normalized.target.sectionId },
         options: {
           highlightCount: Math.min(2, normalized.highlight.highlightCount),
@@ -294,25 +319,31 @@ export function buildDocEditPlanForIntent(
       
       const termsStep: MarkKeyTermsStep = {
         type: 'mark_key_terms',
+        primitive: DocAgentPrimitive.HighlightKeyTerms,
         target: { sectionId: normalized.target.sectionId },
+        terms: undefined,
         options: {
           termCount: Math.min(4, normalized.highlight.termCount ?? 4),
           maxTermLength: 20,
-          style: normalized.highlight.style,
+          markKind: 'key_term',
+          style: normalized.highlight.style ?? 'bold', // 🆕 传递样式
         },
       };
       steps.push(termsStep);
-    }
-    
-    if (__DEV__) {
-      console.log('[DocEditPlanner] Highlight mode:', mode);
+      
+      if (__DEV__) {
+        console.log('[DocEditPlanner] Added primitives: HighlightKeySentences + HighlightKeyTerms');
+      }
     }
   }
 
-  // Step 3: Summary（如果启用）
+  // ==========================================
+  // Primitive 4: AppendSummary（如果启用）
+  // ==========================================
   if (normalized.summary.enabled) {
     const summaryStep: AppendBulletSummaryStep = {
       type: 'append_bullet_summary',
+      primitive: DocAgentPrimitive.AppendSummary,
       target: { sectionId: normalized.target.sectionId },
       options: {
         bulletCount: normalized.summary.bulletCount,
@@ -320,6 +351,10 @@ export function buildDocEditPlanForIntent(
       },
     };
     steps.push(summaryStep);
+    
+    if (__DEV__) {
+      console.log('[DocEditPlanner] Added primitive: AppendSummary');
+    }
   }
 
   // 3. 如果没有任何步骤，抛出错误

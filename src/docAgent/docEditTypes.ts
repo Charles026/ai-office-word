@@ -1,32 +1,148 @@
 /**
  * DocEdit 类型定义
  * 
- * 【设计思路 v2】
+ * 【设计思路 v3 - Primitive 重构】
  * 
- * 1. DocEditIntent（高层业务意图）
+ * 1. DocAgent Primitive（原子能力）
+ *    - RewriteSection: 根据 LLM 输出重写 section 段落
+ *    - HighlightKeyTerms: 在 section 中对词语应用 InlineMark 高亮
+ *    - HighlightKeySentences: 在 section 中对句子应用高亮
+ *    - AppendSummary: 在 section 末尾追加摘要
+ * 
+ * 2. DocEditIntent（高层业务意图）
  *    - 使用「一个主类型 + 多个能力开关」的结构化 schema
- *    - 不再为每个组合定义独立 kind
  *    - 由 Copilot/IntentRouter 产生
  * 
- * 2. DocEditPlan（可执行计划）
- *    - 由 Planner 根据 Intent 的开关组合生成
- *    - 包含有序的步骤列表，每步可映射到 DocOps
+ * 3. DocEditPlan（可执行计划）
+ *    - 由 Planner 根据 Intent 生成 primitive 组合
+ *    - 每个 step 明确对应一个 primitive
  * 
- * 3. DocEditPlanStep（原子操作步骤）
- *    - 每一种 type 对应一类可映射到 DocOps 的原子操作
- *    - rewrite_section / mark_key_sentences / mark_key_terms / append_bullet_summary
+ * 4. DocOps 输出
+ *    - RewriteSection → replace_paragraph DocOps
+ *    - HighlightKeyTerms → apply_inline_mark DocOps
+ *    - 所有写操作必须通过 DocOps，禁止直接 Lexical 操作
  * 
- * 【重构说明】
- * - v1 使用组合式 kind 枚举（如 'rewrite_section_with_highlight_and_summary'）
- * - v2 改用 'section_edit' + rewrite/highlight/summary 子对象开关
- * - 旧的 kind 值保留用于向后兼容（标记为 @deprecated）
- * - v2.1 增加 BehaviorContext 支持（只包含事实数据，不做偏好推断）
+ * 【重构历史】
+ * - v1: 组合式 kind 枚举
+ * - v2: 'section_edit' + 子对象开关
+ * - v3: Primitive 抽象 + DocOps 统一
  */
 
 import type { BehaviorContext } from '../interaction/behaviorSummaryV2';
+import type { InlineMark } from '../document/inlineMark';
 
 // Re-export for convenience
 export type { BehaviorContext };
+
+// ==========================================
+// DocAgent Primitive - 原子能力定义
+// ==========================================
+
+/**
+ * 高亮样式类型
+ * 
+ * - 'default': 由渲染层决定（通常是背景高亮）
+ * - 'bold': 加粗显示
+ * - 'underline': 下划线
+ * - 'background': 背景高亮
+ */
+export type HighlightStyle = 'default' | 'bold' | 'underline' | 'background';
+
+/**
+ * DocAgent Primitive 枚举
+ * 
+ * 每个 primitive 代表一个可复用的原子能力，
+ * 所有 DocEdit 命令都是这些 primitive 的组合。
+ */
+export enum DocAgentPrimitive {
+  /** 重写 Section：根据 LLM 输出替换段落文本 */
+  RewriteSection = 'RewriteSection',
+  
+  /** 
+   * 通用高亮能力：对指定范围（词/句）应用高亮 
+   * 替代 HighlightKeyTerms / HighlightKeySentences
+   */
+  HighlightSpans = 'HighlightSpans',
+
+  /** @deprecated 使用 HighlightSpans */
+  HighlightKeyTerms = 'HighlightKeyTerms',
+  
+  /** @deprecated 使用 HighlightSpans */
+  HighlightKeySentences = 'HighlightKeySentences',
+  
+  /** 追加摘要：在 Section 末尾添加 bullet 摘要 */
+  AppendSummary = 'AppendSummary',
+}
+
+/**
+ * 高亮目标类型（与 Intent 层对齐）
+ */
+export type HighlightTarget = 'key_terms' | 'key_sentences' | 'risks' | 'metrics' | 'custom';
+
+/**
+ * HighlightSpans Primitive 输入
+ */
+export interface HighlightSpansInput {
+  sectionId: string;
+  target: HighlightTarget;
+  style: HighlightStyle;
+  /** 当 target='key_terms' 时必须提供 */
+  terms?: TermHighlightTarget[];
+  // sentences?: ... // 预留
+}
+
+/**
+ * HighlightSpans Primitive 输出
+ */
+export interface HighlightSpansOutput {
+  /** 成功创建的 InlineMark 列表 */
+  marks: InlineMark[];
+  /** 成功应用的 DocOps 数量 */
+  appliedOpsCount: number;
+  /** 未找到的目标 */
+  notFoundTargets: string[];
+}
+
+/**
+ * 词语高亮目标
+ */
+export interface TermHighlightTarget {
+  /** 要高亮的短语（必须在 section 文本中存在） */
+  phrase: string;
+  /** 第几次出现（从 1 开始），默认 1 */
+  occurrence?: number;
+}
+
+/**
+ * HighlightKeyTerms Primitive 输入
+ */
+export interface HighlightKeyTermsInput {
+  sectionId: string;
+  /** 
+   * 要高亮的词语列表
+   * 必须由 CanonicalIntent LLM 提供，不做 fallback 
+   */
+  terms: TermHighlightTarget[];
+  /** 高亮类型（语义分类） */
+  markKind?: 'key_term' | 'important' | 'custom';
+  /** 
+   * 高亮样式（由 CanonicalIntent 根据用户意图决定）
+   * 例如用户说「加粗」时为 'bold'
+   */
+  style?: HighlightStyle;
+}
+
+/**
+ * HighlightKeyTerms Primitive 输出
+ */
+export interface HighlightKeyTermsOutput {
+  /** 成功创建的 InlineMark 列表 */
+  marks: InlineMark[];
+  /** 成功应用的 DocOps 数量 */
+  appliedOpsCount: number;
+  /** 未找到的词语 */
+  notFoundTerms: string[];
+}
 
 // ==========================================
 // Intent Kind 枚举（v2 新版）
@@ -76,11 +192,6 @@ export type ToneType = 'default' | 'formal' | 'casual' | 'neutral' | 'polished';
  * 长度控制类型
  */
 export type LengthType = 'shorter' | 'same' | 'longer' | 'keep'; // 'keep' = 'same'（向后兼容）
-
-/**
- * 高亮样式类型
- */
-export type HighlightStyle = 'bold' | 'marker';
 
 /**
  * 摘要样式类型
@@ -269,9 +380,14 @@ export interface NormalizedDocEditIntent {
 
 /**
  * 改写小节步骤
+ * 
+ * 对应 Primitive: RewriteSection
+ * 输出: replace_paragraph DocOps
  */
 export interface RewriteSectionStep {
   type: 'rewrite_section';
+  /** 对应的 Primitive */
+  primitive: DocAgentPrimitive.RewriteSection;
   target: {
     sectionId: string;
   };
@@ -284,9 +400,14 @@ export interface RewriteSectionStep {
 
 /**
  * 标记关键句步骤
+ * 
+ * 对应 Primitive: HighlightKeySentences
+ * 输出: apply_inline_mark DocOps（或 bold 格式 DocOps）
  */
 export interface MarkKeySentencesStep {
   type: 'mark_key_sentences';
+  /** 对应的 Primitive */
+  primitive: DocAgentPrimitive.HighlightKeySentences;
   target: {
     sectionId: string;
   };
@@ -297,27 +418,48 @@ export interface MarkKeySentencesStep {
 }
 
 /**
- * 🆕 标记关键词语/短语步骤
+ * 标记关键词语/短语步骤
+ * 
+ * 对应 Primitive: HighlightKeyTerms
+ * 输出: apply_inline_mark DocOps
  */
 export interface MarkKeyTermsStep {
   type: 'mark_key_terms';
+  /** 对应的 Primitive */
+  primitive: DocAgentPrimitive.HighlightKeyTerms;
   target: {
     sectionId: string;
   };
+  /** 
+   * 来自 CanonicalIntent 的词语列表
+   * 必须由 LLM 提供，不做 fallback
+   */
+  terms?: TermHighlightTarget[];
   options: {
-    /** 要标记的词语数量 */
-    termCount: number;
-    /** 每个词语的最大长度（字符数） */
-    maxTermLength?: number;
+    /** 高亮类型（语义分类） */
+    markKind?: 'key_term' | 'important' | 'custom';
+    /** 
+     * 高亮样式（由 CanonicalIntent 根据用户意图决定）
+     * 例如用户说「加粗」时为 'bold'
+     */
     style?: HighlightStyle;
+    /** 词语数量 */
+    termCount?: number;
+    /** 最大词语长度 */
+    maxTermLength?: number;
   };
 }
 
 /**
  * 追加 Bullet 摘要步骤
+ * 
+ * 对应 Primitive: AppendSummary
+ * 输出: insert_paragraph DocOps
  */
 export interface AppendBulletSummaryStep {
   type: 'append_bullet_summary';
+  /** 对应的 Primitive */
+  primitive: DocAgentPrimitive.AppendSummary;
   target: {
     sectionId: string;
   };
@@ -328,12 +470,33 @@ export interface AppendBulletSummaryStep {
 }
 
 /**
+ * 通用高亮步骤
+ * 
+ * 对应 Primitive: HighlightSpans
+ * 替代 MarkKeyTermsStep / MarkKeySentencesStep
+ */
+export interface HighlightSpansStep {
+  type: 'highlight_spans';
+  primitive: DocAgentPrimitive.HighlightSpans;
+  target: {
+    sectionId: string;
+  };
+  options: {
+    target: HighlightTarget;
+    style: HighlightStyle;
+    /** 当 target='key_terms' 时使用 */
+    terms?: TermHighlightTarget[];
+  };
+}
+
+/**
  * DocEdit Plan 步骤联合类型
  */
 export type DocEditPlanStep =
   | RewriteSectionStep
-  | MarkKeySentencesStep
-  | MarkKeyTermsStep
+  | MarkKeySentencesStep // @deprecated
+  | MarkKeyTermsStep     // @deprecated
+  | HighlightSpansStep   // 🆕 通用高亮步骤
   | AppendBulletSummaryStep;
 
 // ==========================================

@@ -47,6 +47,10 @@ import type { SectionDocOp } from '../docops/sectionDocOpsDiff';
 import { runDocEditPlan, buildDocEditPlanForIntent, buildDocEditIntentFromCommand } from '../docAgent';
 import type { ToneType, LengthType } from '../docAgent/docEditTypes';
 import {
+  hasHighlightTasks,
+  filterHighlightTasks,
+} from '../actions/highlightExecution';
+import {
   logAiRewriteApplied,
   logAiSummaryApplied,
   logAiComplexApplied,
@@ -512,6 +516,15 @@ export async function applyPreviewResult(pendingResultId: string): Promise<boole
         } else if (tasks.some(t => t.type === 'summarize')) {
           logAiSummaryApplied(docId, sectionId);
         }
+        
+        // 执行高亮任务（mark_key_terms / mark_key_sentences / mark_key_paragraphs）
+        if (hasHighlightTasks(tasks)) {
+          // 需要获取 editor 实例来执行高亮
+          // 由于这里没有 editor 引用，高亮任务将在下次 editor 更新时处理
+          // TODO: 考虑通过 event bus 或 store 传递高亮任务到 UI 层执行
+          const highlightTasks = filterHighlightTasks(tasks);
+          console.log('[CopilotBridge] Highlight tasks pending:', highlightTasks.length);
+        }
       }
 
       // 添加成功消息
@@ -701,13 +714,15 @@ export async function resolveClarification(
  * 执行复合意图命令（改写 + 标记重点 / 摘要）
  * 
  * v2 重构：使用 buildDocEditIntentFromCommand 适配层
+ * v2.1: 新增 userInput 参数，用于检测 highlightMode（terms vs sentences）
  */
 async function runComplexIntentCommand(
   resolved: ResolvedCommand,
   actionMsg: CopilotMessage,
   docId: string,
   editor: LexicalEditor,
-  snapshotId?: string
+  snapshotId?: string,
+  userInput?: string
 ): Promise<void> {
   const sectionId = resolved.sectionId!;
   const options = resolved.options as {
@@ -717,6 +732,7 @@ async function runComplexIntentCommand(
     bulletCount?: number;
     tone?: string;
     length?: string;
+    highlightOnly?: boolean; // 🆕 只高亮不改写
   } || {};
 
   try {
@@ -730,6 +746,8 @@ async function runComplexIntentCommand(
     }
 
     // 2. 使用新的适配层构建 DocEditIntent（v2）
+    // 🆕 传入 userInput，用于检测 highlightMode（terms vs sentences）
+    // 🆕 传入 highlightOnly，用于独立高亮（不改写）
     const intent = buildDocEditIntentFromCommand(resolved.command, {
       docId,
       sectionId,
@@ -737,9 +755,12 @@ async function runComplexIntentCommand(
       length: options.length as LengthType | undefined,
       highlightCount: options.highlightCount,
       bulletCount: options.bulletCount,
+      userInput, // 🆕 用于检测 "重点词语" vs "关键句"
+      highlightOnly: options.highlightOnly as boolean | undefined, // 🆕 只高亮不改写
     });
     
     console.log('[CopilotBridge] Built intent from command:', resolved.command, intent);
+    console.log('[CopilotBridge] UserInput for highlight detection:', userInput?.slice(0, 50));
 
     // 3. 构建 DocEditPlan
     const plan = buildDocEditPlanForIntent(intent, sectionContext);
@@ -896,12 +917,18 @@ export async function runCopilotCommand(
   };
   copilotStore.appendMessage(docId, actionMsg);
 
-  // 6. 检查是否是复合命令（DocEditPlan）
-  if (resolved.command === 'rewrite_section_with_highlight' || 
-      resolved.command === 'rewrite_section_with_highlight_and_summary') {
-    // 复合命令走 DocEditPlan 执行
+  // 6. 检查是否是 DocEditPlan 命令（复合命令或独立高亮命令）
+  const isDocEditPlanCommand = [
+    'rewrite_section_with_highlight',
+    'rewrite_section_with_highlight_and_summary',
+    'highlight_key_terms', // 独立高亮命令（Primitive: HighlightKeyTerms only）
+  ].includes(resolved.command);
+  
+  if (isDocEditPlanCommand) {
+    // DocEditPlan 命令走 primitive 执行流程
+    // 🆕 传入用户原始输入，用于检测 highlightMode（terms vs sentences）
     try {
-      await runComplexIntentCommand(resolved, actionMsg, docId, editor, snapshotId);
+      await runComplexIntentCommand(resolved, actionMsg, docId, editor, snapshotId, userMessage.content);
     } finally {
       // 🆕 清除 Section 命令执行标志
       if (isSectionCommand) {

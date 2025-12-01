@@ -17,6 +17,7 @@ export {
   type DocSkeleton,
   
   // 核心函数
+  buildDocStructure,
   buildDocStructureFromEditor,
   buildDocStructureFromAst,
   

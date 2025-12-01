@@ -61,6 +61,80 @@ const COPILOT_PRINCIPLES = `
 
 如果你对意图理解足够清晰，但改动涉及较多内容（例如长段落重写、合并多段）：
 - 更推荐使用 responseMode = "preview"，先生成一个预览结果（例如新版本内容），让用户确认后再应用到文档。
+
+=== 高亮任务选择规则（词语级 vs 句子级）===
+
+当用户请求中包含「高亮」「标记」「突出」等意图时，请根据以下规则选择正确的任务类型：
+
+【使用 mark_key_terms（词语/短语级）的情况】
+用户使用以下表达时，必须输出 mark_key_terms 任务：
+- 「标出 X 个重点词语」「关键词」「核心术语」
+- 「highlight key terms」「keywords」「key phrases」
+- 「3–5 个词」「几个关键概念」
+- 「标记重要术语」「专业名词」
+
+mark_key_terms 的 terms 规则：
+- phrase 必须是重写后段落中按原文出现的短语，不能是整句
+- 英文建议 2–7 个单词，中文建议 3–15 个字符
+- 若用户说「3–5 个」，返回 3–5 条即可
+
+【使用 mark_key_sentences（句子级）的情况】
+用户使用以下表达时，使用 mark_key_sentences 任务：
+- 「关键句」「重要句子」「核心观点句」
+- 「key sentences」「important sentences」
+- 「标出最重要的句子」
+
+【同时使用两种的情况】
+如果用户同时提到「重点词语」和「关键句」，可以在 tasks 中同时包含两种任务。
+
+【style 样式字段规则】
+当用户在请求中提到样式相关词汇时，必须在 mark_key_terms.params 中设置 style 字段：
+- 用户说「加粗」「标粗」「bold」→ style: "bold"
+- 用户说「下划线」「underline」→ style: "underline"
+- 用户说「高亮」「背景」「highlight」→ style: "background"
+- 用户没有明确说样式 → style: "default" 或不设置
+
+【只标记不改写的情况】
+当用户的请求中只包含「标记」「高亮」「加粗」等词，但不包含「改写」「润色」「优化」等词时：
+- tasks 中只包含 mark_key_terms，不要包含 rewrite
+- 例如：「这一段标记 3-5 个重点单词并加粗」→ 只有 mark_key_terms，无 rewrite
+
+=== 示例 1：改写 + 标记词语 ===
+用户输入：「改写这一节，并标出 3–5 个重点词语」
+tasks：
+[
+  { "type": "rewrite", "params": { "tone": "default" } },
+  {
+    "type": "mark_key_terms",
+    "params": {
+      "sectionId": "<当前 section id>",
+      "terms": [
+        { "phrase": "requirements and design", "occurrence": 1 },
+        { "phrase": "coherent product", "occurrence": 1 },
+        { "phrase": "implementation efforts", "occurrence": 1 }
+      ]
+    }
+  }
+]
+
+=== 示例 2：只标记词语（加粗）===
+用户输入：「这一段标记 3-5 个重点单词并加粗」
+tasks：
+[
+  {
+    "type": "mark_key_terms",
+    "params": {
+      "sectionId": "<当前 section id>",
+      "style": "bold",
+      "terms": [
+        { "phrase": "user experience", "occurrence": 1 },
+        { "phrase": "design patterns", "occurrence": 1 },
+        { "phrase": "implementation", "occurrence": 1 }
+      ]
+    }
+  }
+]
+注意：此例中没有 rewrite 任务，因为用户只要求标记，不要求改写。
 `;
 
 /**
@@ -98,6 +172,13 @@ Additional rules for EXPAND mode:
 - Add relevant details, examples, or explanations
 - Keep the logical structure intact
 - Do not contradict the original content`,
+    highlight: `
+Additional rules for HIGHLIGHT mode:
+- DO NOT rewrite or modify the original text
+- Only identify 3-5 key terms/phrases from the existing text
+- Each term should be 2-7 words (English) or 3-15 characters (Chinese)
+- Terms must exist exactly as written in the original text
+- DO NOT output [docops] block - only output [assistant] and [intent]`,
   };
 
   return BASE_SYSTEM_PROMPT + modeSpecificRules[mode];
@@ -213,15 +294,236 @@ function getTaskInstruction(mode: PromptMode, options?: AgentIntentOptions): str
 }
 
 // ==========================================
+// 高亮模式相关
+// ==========================================
+
+import type { HighlightMode } from '../intents/types';
+
+/**
+ * 根据高亮模式获取允许的高亮任务类型
+ */
+function getAllowedHighlightKinds(highlightMode: HighlightMode): string[] {
+  switch (highlightMode) {
+    case 'terms':
+      return ['mark_key_terms'];
+    case 'sentences':
+      return ['mark_key_sentences'];
+    case 'paragraphs':
+      return ['mark_key_paragraphs'];
+    case 'auto':
+      return ['mark_key_terms', 'mark_key_sentences', 'mark_key_paragraphs'];
+    case 'none':
+    default:
+      return [];
+  }
+}
+
+/**
+ * 获取高亮任务说明
+ */
+function getHighlightTaskInstruction(highlightMode: HighlightMode, sectionId: string): string {
+  if (highlightMode === 'none') {
+    return '';
+  }
+
+  const allowedKinds = getAllowedHighlightKinds(highlightMode);
+  
+  let instruction = `
+=== 高亮任务说明 ===
+
+本次请求允许的高亮任务类型: ${allowedKinds.join(', ')}
+
+`;
+
+  if (allowedKinds.includes('mark_key_terms')) {
+    instruction += `
+【mark_key_terms - 词语/短语级高亮】
+用于标记文中的关键概念、专业术语、核心论点等。
+
+规则：
+- terms 是「词语/短语」，不是整句
+- 中文建议长度 3–15 字；英文建议 2–7 个词
+- 选择真正重要的概念，不要标太多纯功能词
+- 同一个短语出现多次时，可使用 occurrence 指定第几次（从 1 开始）；不指定默认为第一次
+- 不要跨句选择
+
+示例：
+{
+  "type": "mark_key_terms",
+  "params": {
+    "sectionId": "${sectionId}",
+    "terms": [
+      { "phrase": "关键概念", "occurrence": 1 },
+      { "phrase": "核心论点" }
+    ]
+  }
+}
+
+`;
+  }
+
+  if (allowedKinds.includes('mark_key_sentences')) {
+    instruction += `
+【mark_key_sentences - 句子级高亮】
+用于标记文中的核心观点句、总结句、关键论据等。
+
+规则：
+- 选择完整的句子
+- 优先选择段落的主题句、结论句
+- 不要选择过渡句或纯描述性句子
+
+示例：
+{
+  "type": "mark_key_sentences",
+  "params": {
+    "sectionId": "${sectionId}",
+    "sentenceIndexes": [0, 3],
+    "sentences": [
+      { "text": "这是核心观点句。" }
+    ]
+  }
+}
+
+`;
+  }
+
+  if (allowedKinds.includes('mark_key_paragraphs')) {
+    instruction += `
+【mark_key_paragraphs - 段落级高亮】（预留功能）
+用于标记整个段落的重要性。
+
+示例：
+{
+  "type": "mark_key_paragraphs",
+  "params": {
+    "sectionId": "${sectionId}",
+    "paragraphIndexes": [0, 2]
+  }
+}
+
+`;
+  }
+
+  if (highlightMode === 'auto') {
+    instruction += `
+【auto 模式说明】
+你可以根据内容特点选择最合适的高亮粒度：
+- 优先用 mark_key_terms 标出关键概念和术语
+- 如有必要，再用 mark_key_sentences 标出核心观点句
+- 可以同时输出多种高亮任务
+
+`;
+  } else if (highlightMode === 'terms') {
+    instruction += `
+【terms 模式说明】
+本次只允许使用 mark_key_terms，请专注于词语/短语级别的标注。
+
+`;
+  } else if (highlightMode === 'sentences') {
+    instruction += `
+【sentences 模式说明】
+本次只允许使用 mark_key_sentences，请专注于句子级别的标注。
+
+`;
+  }
+
+  return instruction;
+}
+
+// ==========================================
 // 输出格式模板
 // ==========================================
+
+/**
+ * 🆕 Highlight-only 输出格式（不要求 docops）
+ * 
+ * 用于 highlight_section agent，只需要 [assistant] 和 [intent]
+ */
+function getHighlightOnlyOutputFormat(sectionId: string = ''): string {
+  return `OUTPUT FORMAT (HIGHLIGHT ONLY - NO DOCOPS REQUIRED):
+
+You are identifying key terms/phrases from the text. DO NOT rewrite the text.
+
+Always respond using ONLY these two blocks (no [docops] block needed):
+
+[assistant]
+A brief acknowledgement (1 sentence). Example: "I've identified 4 key terms from this section."
+
+[intent]
+{
+  "intentId": "highlight-${Date.now()}",
+  "scope": { "target": "section", "sectionId": "${sectionId || '<section id>'}" },
+  "tasks": [
+    {
+      "type": "mark_key_terms",
+      "params": {
+        "sectionId": "${sectionId || '<section id>'}",
+        "terms": [
+          { "phrase": "exact phrase from text", "occurrence": 1 },
+          { "phrase": "another key term" },
+          { "phrase": "important concept" }
+        ],
+        "style": "bold"
+      }
+    }
+  ],
+  "confidence": 0.9,
+  "responseMode": "auto_apply"
+}
+
+IMPORTANT RULES:
+1. DO NOT output [docops] block - only [assistant] and [intent]
+2. Each "phrase" MUST be an exact substring from the original text
+3. Select 3-5 key terms that are important concepts/terminology
+4. For English: each phrase should be 2-7 words
+5. For Chinese: each phrase should be 3-15 characters
+6. DO NOT include common words like "the", "a", "is", "and"
+7. Prefer noun phrases, technical terms, or named entities`;
+}
 
 /**
  * 获取输出格式要求 (v2)
  * 
  * 新增：confidence / uncertainties / responseMode 字段
+ * 新增：根据 highlightMode 动态生成允许的任务类型
  */
-function getOutputFormatInstruction(): string {
+function getOutputFormatInstruction(highlightMode: HighlightMode = 'none', sectionId: string = ''): string {
+  const allowedHighlightKinds = getAllowedHighlightKinds(highlightMode);
+  const highlightTaskInstruction = getHighlightTaskInstruction(highlightMode, sectionId);
+  
+  // 构建高亮任务示例
+  let highlightTaskExample = '';
+  if (allowedHighlightKinds.length > 0) {
+    if (allowedHighlightKinds.includes('mark_key_terms')) {
+      highlightTaskExample += `,
+    {
+      "type": "mark_key_terms",
+      "params": {
+        "sectionId": "${sectionId || '<section id>'}",
+        "terms": [
+          { "phrase": "关键概念", "occurrence": 1 },
+          { "phrase": "核心术语" }
+        ]
+      }
+    }`;
+    }
+    if (allowedHighlightKinds.includes('mark_key_sentences')) {
+      highlightTaskExample += `,
+    {
+      "type": "mark_key_sentences",
+      "params": {
+        "sectionId": "${sectionId || '<section id>'}",
+        "sentenceIndexes": [0]
+      }
+    }`;
+    }
+  }
+
+  // 构建高亮模式说明
+  const highlightModeNote = highlightMode !== 'none' 
+    ? `\n\n注意：本次请求的高亮模式为「${highlightMode}」，允许的高亮任务: ${allowedHighlightKinds.join(', ') || '无'}`
+    : '';
+
   return `OUTPUT FORMAT (STRICT):
 
 Always respond using the following blocks (plain text, no Markdown code fences):
@@ -233,8 +535,10 @@ If responseMode is "clarify", this should be a specific question with 2-3 candid
 [intent]
 {
   "intentId": "...",
-  "scope": { "sectionId": "<current section id>" },
-  "tasks": [ ... ],
+  "scope": { "target": "section", "sectionId": "${sectionId || '<current section id>'}" },
+  "tasks": [
+    { "type": "rewrite", "params": { "tone": "formal", "depth": "medium" } }${highlightTaskExample}
+  ],
   "confidence": 0.85,
   "uncertainties": [
     {
@@ -245,6 +549,60 @@ If responseMode is "clarify", this should be a specific question with 2-3 candid
   ],
   "responseMode": "auto_apply"
 }
+${highlightModeNote}
+${highlightTaskInstruction}
+=== tasks 字段说明 ===
+
+tasks 是一个任务数组，每个任务必须有 "type" 字段。
+
+基础任务类型：
+1. rewrite（重写）:
+   { "type": "rewrite", "params": { "tone": "formal", "depth": "medium" } }
+
+2. summarize（总结）:
+   { "type": "summarize", "params": { "style": "bullet" } }
+
+3. insert_block（插入内容块）:
+   { "type": "insert_block", "params": { "blockType": "paragraph" } }
+
+4. add_comment（添加批注）:
+   { "type": "add_comment", "params": { "comment": "..." } }
+
+高亮任务类型（根据 highlightMode 决定可用性）：
+5. mark_key_terms（词语/短语级标记）:
+   {
+     "type": "mark_key_terms",
+     "params": {
+       "sectionId": "${sectionId || '<section id>'}",
+       "terms": [
+         { "phrase": "关键概念", "occurrence": 1 },
+         { "phrase": "核心术语" }
+       ]
+     }
+   }
+
+6. mark_key_sentences（句子级标记）:
+   {
+     "type": "mark_key_sentences",
+     "params": {
+       "sectionId": "${sectionId || '<section id>'}",
+       "sentenceIndexes": [0, 3]
+     }
+   }
+
+7. mark_key_paragraphs（段落级标记）:
+   {
+     "type": "mark_key_paragraphs",
+     "params": {
+       "sectionId": "${sectionId || '<section id>'}",
+       "paragraphIndexes": [0]
+     }
+   }
+
+注意：
+- 如果需要同时改写并标记重点，请返回多个任务
+- 高亮任务只有在 highlightMode 允许时才能使用
+- 当前允许的高亮任务: ${allowedHighlightKinds.length > 0 ? allowedHighlightKinds.join(', ') : '无（highlightMode = none）'}
 
 === Intent 字段说明 ===
 
@@ -379,6 +737,8 @@ function getModeFromIntent(intent: AgentIntent): PromptMode {
       return 'summarize';
     case 'expand_section':
       return 'expand';
+    case 'highlight_section':
+      return 'highlight';
     default:
       return 'rewrite';
   }
@@ -517,7 +877,14 @@ ${behaviorSummary.summaryText}`;
   // 4. 构建 User Prompt 各部分
   const sectionJson = formatSectionAsJson(simplifiedSection);
   const taskInstruction = getTaskInstruction(mode, intent.options);
-  const outputFormat = getOutputFormatInstruction();
+  
+  // 获取高亮模式（默认为 'none'）
+  const highlightMode = (intent.options?.highlightMode as HighlightMode) || 'none';
+  
+  // 🆕 highlight 模式使用专门的 intent-only 输出格式
+  const outputFormat = mode === 'highlight' 
+    ? getHighlightOnlyOutputFormat(context.sectionId)
+    : getOutputFormatInstruction(highlightMode, context.sectionId);
 
   // 5. 组装 User Prompt
   const user = `INPUT SECTION:

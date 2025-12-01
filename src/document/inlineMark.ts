@@ -16,6 +16,7 @@
  */
 
 import type { LexicalEditor, LexicalNode } from 'lexical';
+import { $getRoot, $isElementNode, $isTextNode } from 'lexical';
 
 // ==========================================
 // TextAnchor - 词语级锚点
@@ -600,9 +601,6 @@ export function getSectionTextFromEditor(
   let result: string | null = null;
   
   editor.getEditorState().read(() => {
-    const lexical = require('lexical');
-    const $getRoot = lexical.$getRoot;
-    
     const root = $getRoot();
     const children = root.getChildren() as LexicalNode[];
     
@@ -639,12 +637,6 @@ export function buildNodeOffsetMap(
   const entries: NodeOffsetEntry[] = [];
   
   editor.getEditorState().read(() => {
-    // 使用动态导入以避免 TypeScript 类型问题
-    const lexical = require('lexical');
-    const $getRoot = lexical.$getRoot;
-    const $isElementNode = lexical.$isElementNode;
-    const $isTextNode = lexical.$isTextNode;
-    
     const root = $getRoot();
     const children = root.getChildren() as LexicalNode[];
     

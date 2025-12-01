@@ -12,9 +12,11 @@ export {
   buildRewriteSectionIntent,
   buildSummarizeSectionIntent,
   buildExpandSectionIntent,
+  buildHighlightOnlyIntent,
   // 选项类型
   type RewriteSectionOptions,
   type SummarizeSectionOptions,
   type ExpandSectionOptions,
+  type HighlightOnlyOptions,
 } from './buildSectionIntent';
 
