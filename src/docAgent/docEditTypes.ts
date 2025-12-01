@@ -149,34 +149,56 @@ export interface HighlightKeyTermsOutput {
 // ==========================================
 
 /**
- * DocEdit 意图主类型（v2）
+ * DocEdit 意图主类型（v3 - Atomic Intent 重构）
  * 
- * 新版设计：使用少数大类 + 多个能力开关
- * - 'section_edit': 章节编辑类意图（改写/高亮/摘要等组合）
- * - 'section_analysis': 章节分析类意图（未来扩展）
- * - 'document_edit': 文档级编辑意图（未来扩展）
- * - 'custom': 自定义复杂操作
+ * 【v3 重构原则】
+ * 只保留原子意图，组合逻辑放在 Orchestrator 层
+ * 
+ * 原子意图：
+ * - 'section_edit': 章节编辑（rewrite/summarize/expand）
+ * - 'section_highlight': 章节高亮（独立的高亮操作）
+ * - 'section_analysis': 章节分析（未来扩展）
+ * - 'document_edit': 文档级编辑（未来扩展）
+ * - 'custom': 自定义操作
  */
 export type DocEditIntentKind =
-  // v2 新枚举
-  | 'section_edit'
+  // v3 原子意图
+  | 'section_edit'      // 章节编辑（rewrite/summarize/expand）
+  | 'section_highlight' // 🆕 章节高亮（独立操作）
   | 'section_analysis'
   | 'document_edit'
-  | 'custom'
-  // v1 旧枚举（@deprecated，保留用于向后兼容）
+  | 'custom';
+
+/**
+ * @deprecated v1/v2 混合意图已废弃
+ * 
+ * 旧版 kind 列表（仅用于兼容层，不应在新代码中使用）：
+ * - 'rewrite_section_with_highlight_and_summary'
+ * - 'rewrite_section_with_highlight'
+ * - 'rewrite_section_plain'
+ * - 'summarize_section_plain'
+ * 
+ * 这些混合意图现在应该通过 SectionEditMacro 组合原子步骤来实现
+ */
+export type LegacyDocEditIntentKind =
   | 'rewrite_section_with_highlight_and_summary'
+  | 'rewrite_section_with_highlight'
   | 'rewrite_section_plain'
   | 'summarize_section_plain';
 
 /**
- * 检查是否为旧版 kind（用于兼容层）
+ * 检查是否为旧版 kind（用于兼容层迁移）
+ * 
+ * @deprecated 旧版 kind 已废弃，新代码不应使用
  */
-export function isLegacyIntentKind(kind: DocEditIntentKind): boolean {
-  return [
+export function isLegacyIntentKind(kind: string): boolean {
+  const legacyKinds: string[] = [
     'rewrite_section_with_highlight_and_summary',
+    'rewrite_section_with_highlight',
     'rewrite_section_plain',
     'summarize_section_plain',
-  ].includes(kind);
+  ];
+  return legacyKinds.includes(kind);
 }
 
 // ==========================================

@@ -35,6 +35,7 @@ import {
 } from '../../document/inlineMark';
 import { documentRuntime } from '../../document';
 import { extractSectionContext } from '../../runtime/context';
+import { reconcileAstToLexical } from '../../core/commands/LexicalReconciler';
 
 // ==========================================
 // Primitive 执行器
@@ -180,6 +181,13 @@ async function executeHighlightKeyTerms(
       const success = documentRuntime.applyDocOps(allOps);
       if (success) {
         console.log('[Primitive:HighlightSpans] ✅ DocOps applied successfully');
+        
+        // 🔴 关键：将 AST 变更同步回 Lexical 渲染
+        const snapshot = documentRuntime.getSnapshot();
+        reconcileAstToLexical(editor, snapshot.ast, {
+          selection: snapshot.selection,
+        });
+        console.log('[Primitive:HighlightSpans] ✅ Reconciled AST to Lexical');
       } else {
         console.warn('[Primitive:HighlightSpans] ⚠️ DocOps application returned false');
       }

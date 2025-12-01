@@ -829,10 +829,26 @@ export function applyLineHeight(editor: LexicalEditor, lineHeightKey: LineHeight
  * - 保持段落样式不变
  * - 作为单次操作进入 Undo 栈
  * 
+ * ⚠️ WARNING: 这是绕过 DocumentEngine 的直写路径！
+ * 
+ * 【目标架构】
+ * 应使用 DocOpsEngine.buildOpsForRewriteSelection() → DocumentRuntime.applyDocOps()
+ * 
+ * TODO(docops-boundary): 改为通过 DocOps 执行
+ * 
  * @param editor - Lexical 编辑器实例
  * @param newText - 替换后的文本
  */
 export function replaceSelection(editor: LexicalEditor, newText: string): void {
+  // ============================================================
+  // 🚨 BYPASSING DocumentEngine - DIRECT LEXICAL MUTATION
+  // 
+  // TODO: 改为使用 DocOps:
+  // const selection = lexicalSelectionToDocSelection(editor);
+  // const ops = docOpsEngine.buildOpsForRewriteSelection(ast, selection, newText);
+  // documentRuntime.applyDocOps(ops);
+  // ============================================================
+  console.warn('[LexicalAdapter] ⚠️ BYPASSING DocumentEngine: replaceSelection');
   editor.update(() => {
     const selection = $getSelection();
     if (!$isRangeSelection(selection)) {
@@ -845,12 +861,11 @@ export function replaceSelection(editor: LexicalEditor, newText: string): void {
       return;
     }
 
-    // 删除选区内容并插入新文本
-    // Lexical 的 insertText 会自动处理选区删除
+    // 🚨 直接操作 Lexical selection
     selection.insertText(newText);
     
     console.log('[LexicalAdapter] replaceSelection: Replaced with', newText.length, 'chars');
-  }, { tag: 'ai-rewrite' }); // 添加标签用于识别这次更新
+  }, { tag: 'ai-rewrite' });
 }
 
 /**
@@ -862,10 +877,26 @@ export function replaceSelection(editor: LexicalEditor, newText: string): void {
  * - 新段落带有"总结："前缀
  * - 作为单次操作进入 Undo 栈
  * 
+ * ⚠️ WARNING: 这是绕过 DocumentEngine 的直写路径！
+ * 
+ * 【目标架构】
+ * 应使用 InsertParagraph DocOp → DocumentRuntime.applyDocOps()
+ * 
+ * TODO(docops-boundary): 改为通过 DocOps 执行
+ * 
  * @param editor - Lexical 编辑器实例
  * @param text - 要插入的文本（摘要内容）
  */
 export function insertAfterSelection(editor: LexicalEditor, text: string): void {
+  // ============================================================
+  // 🚨 BYPASSING DocumentEngine - DIRECT LEXICAL MUTATION
+  // 
+  // TODO: 改为使用 DocOps:
+  // const selection = lexicalSelectionToDocSelection(editor);
+  // const ops = [{ type: 'InsertParagraph', payload: { afterNodeId: focusBlockId, text: '总结：' + text }, meta }];
+  // documentRuntime.applyDocOps(ops);
+  // ============================================================
+  console.warn('[LexicalAdapter] ⚠️ BYPASSING DocumentEngine: insertAfterSelection');
   editor.update(() => {
     const selection = $getSelection();
     if (!$isRangeSelection(selection)) {
@@ -873,30 +904,26 @@ export function insertAfterSelection(editor: LexicalEditor, text: string): void 
       return;
     }
 
-    // 获取选区末尾所在的顶级块节点
+    // 🚨 直接操作 Lexical 节点
     const focusNode = selection.focus.getNode();
     const topLevelElement = focusNode.getTopLevelElementOrThrow();
 
-    // 创建新的段落节点
     const summaryParagraph = $createParagraphNode();
     
-    // 创建带有"总结："前缀的文本节点
     const prefixText = $createTextNode('总结：');
-    prefixText.setFormat('bold'); // 前缀加粗
+    prefixText.setFormat('bold');
     
     const contentText = $createTextNode(text);
     
     summaryParagraph.append(prefixText);
     summaryParagraph.append(contentText);
 
-    // 在顶级块节点之后插入新段落
     topLevelElement.insertAfter(summaryParagraph);
 
-    // 将光标移动到新段落末尾
     summaryParagraph.selectEnd();
     
     console.log('[LexicalAdapter] insertAfterSelection: Inserted summary paragraph');
-  }, { tag: 'ai-summarize' }); // 添加标签用于识别这次更新
+  }, { tag: 'ai-summarize' });
 }
 
 // ==========================================
@@ -947,10 +974,24 @@ function getHeadingLevel(node: LexicalNode): number | null {
  * - 删除 heading 之后、下一个同级或更高级别 heading 之前的所有内容
  * - 插入新内容
  * - 作为单次操作进入 Undo 栈
+ * 
+ * ⚠️ WARNING: 这是绕过 DocumentEngine 的直写路径！
+ * 
+ * 【目标架构】
+ * 应使用 SectionDocOps → convertSectionOpsToDocOps() → DocumentRuntime.applyDocOps()
+ * 
+ * TODO(docops-boundary): 改为通过 DocOps 执行
  */
 export function replaceSectionContent(editor: LexicalEditor, payload: ReplaceSectionPayload): void {
   const { headingId, newContent, replaceHeading, newHeadingText } = payload;
   
+  // ============================================================
+  // 🚨 BYPASSING DocumentEngine - DIRECT LEXICAL MUTATION
+  // 
+  // TODO: 改为使用 sectionAiActions 的 applyDocOps (在其改造完成后)
+  // 或直接调用 documentRuntime.applyDocOps()
+  // ============================================================
+  console.warn('[LexicalAdapter] ⚠️ BYPASSING DocumentEngine: replaceSectionContent');
   editor.update(() => {
     const root = $getRoot();
     const children = root.getChildren();
@@ -1045,10 +1086,21 @@ export function replaceSectionContent(editor: LexicalEditor, payload: ReplaceSec
  * - 找到指定 heading 的章节末尾
  * - 在该位置插入新的摘要段落
  * - 不修改原有内容
+ * 
+ * ⚠️ WARNING: 这是绕过 DocumentEngine 的直写路径！
+ * 
+ * 【目标架构】
+ * 应使用 InsertParagraph DocOp → DocumentRuntime.applyDocOps()
+ * 
+ * TODO(docops-boundary): 改为通过 DocOps 执行
  */
 export function insertAfterSection(editor: LexicalEditor, payload: InsertAfterSectionPayload): void {
   const { headingId, text } = payload;
   
+  // ============================================================
+  // 🚨 BYPASSING DocumentEngine - DIRECT LEXICAL MUTATION
+  // ============================================================
+  console.warn('[LexicalAdapter] ⚠️ BYPASSING DocumentEngine: insertAfterSection');
   editor.update(() => {
     const root = $getRoot();
     const children = root.getChildren();

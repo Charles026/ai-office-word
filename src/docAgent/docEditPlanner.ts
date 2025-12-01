@@ -101,6 +101,9 @@ export function normalizeDocEditIntent(intent: DocEditIntent): NormalizedDocEdit
  * 将旧版 Intent 转换为归一化格式
  * 
  * @deprecated 用于向后兼容，未来会移除
+ * 
+ * 注意：旧版 kind 值（如 'rewrite_section_with_highlight_and_summary'）
+ * 已从 DocEditIntentKind 类型中移除，这里使用字符串比较进行兼容
  */
 function normalizeLegacyIntent(intent: DocEditIntent): NormalizedDocEditIntent {
   if (__DEV__) {
@@ -132,56 +135,59 @@ function normalizeLegacyIntent(intent: DocEditIntent): NormalizedDocEditIntent {
     style: INTENT_DEFAULTS.summary.style,
   };
 
-  switch (intent.kind) {
-    case 'rewrite_section_with_highlight_and_summary':
-      return {
-        kind: 'section_edit',
-        target: intent.target,
-        rewrite: baseRewrite,
-        highlight: {
-          ...baseHighlight,
-          enabled: true,
-          highlightCount: intent.formatting?.highlightCount ?? INTENT_DEFAULTS.highlight.highlightCount,
-        },
-        summary: {
-          ...baseSummary,
-          enabled: true,
-          bulletCount: intent.summary?.bulletCount ?? INTENT_DEFAULTS.summary.bulletCount,
-        },
-      };
+  // 使用字符串比较来处理旧版 kind（已从 DocEditIntentKind 类型中移除）
+  const kindStr = intent.kind as string;
 
-    case 'rewrite_section_plain':
-      return {
-        kind: 'section_edit',
-        target: intent.target,
-        rewrite: baseRewrite,
-        highlight: baseHighlight,
-        summary: baseSummary,
-      };
-
-    case 'summarize_section_plain':
-      return {
-        kind: 'section_edit',
-        target: intent.target,
-        rewrite: { ...baseRewrite, enabled: false },
-        highlight: baseHighlight,
-        summary: {
-          ...baseSummary,
-          enabled: true,
-          bulletCount: intent.summary?.bulletCount ?? INTENT_DEFAULTS.summary.bulletCount,
-        },
-      };
-
-    default:
-      // Fallback: 默认只启用 rewrite
-      return {
-        kind: 'section_edit',
-        target: intent.target,
-        rewrite: baseRewrite,
-        highlight: baseHighlight,
-        summary: baseSummary,
-      };
+  if (kindStr === 'rewrite_section_with_highlight_and_summary') {
+    return {
+      kind: 'section_edit',
+      target: intent.target,
+      rewrite: baseRewrite,
+      highlight: {
+        ...baseHighlight,
+        enabled: true,
+        highlightCount: intent.formatting?.highlightCount ?? INTENT_DEFAULTS.highlight.highlightCount,
+      },
+      summary: {
+        ...baseSummary,
+        enabled: true,
+        bulletCount: intent.summary?.bulletCount ?? INTENT_DEFAULTS.summary.bulletCount,
+      },
+    };
   }
+
+  if (kindStr === 'rewrite_section_plain') {
+    return {
+      kind: 'section_edit',
+      target: intent.target,
+      rewrite: baseRewrite,
+      highlight: baseHighlight,
+      summary: baseSummary,
+    };
+  }
+
+  if (kindStr === 'summarize_section_plain') {
+    return {
+      kind: 'section_edit',
+      target: intent.target,
+      rewrite: { ...baseRewrite, enabled: false },
+      highlight: baseHighlight,
+      summary: {
+        ...baseSummary,
+        enabled: true,
+        bulletCount: intent.summary?.bulletCount ?? INTENT_DEFAULTS.summary.bulletCount,
+      },
+    };
+  }
+
+  // Fallback: 默认只启用 rewrite
+  return {
+    kind: 'section_edit',
+    target: intent.target,
+    rewrite: baseRewrite,
+    highlight: baseHighlight,
+    summary: baseSummary,
+  };
 }
 
 // ==========================================

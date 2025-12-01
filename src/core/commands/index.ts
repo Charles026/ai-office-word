@@ -14,7 +14,11 @@ export {
 export type { CommandFeatureFlags } from './featureFlags';
 
 // Lexical 桥接层
-export { reconcileAstToLexical } from './LexicalReconciler';
+export { 
+  reconcileAstToLexical, 
+  updateAstIdsFromLexical,
+  reconcileAndAlignIds,
+} from './LexicalReconciler';
 export {
   lexicalSelectionToDocSelection,
   syncLexicalToRuntime,

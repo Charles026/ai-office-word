@@ -36,6 +36,7 @@ import { ParagraphStyle, getStyleFromBlockType } from './styles/paragraphStyles'
 import { FontOptionKey, matchFontFamily } from '../config/fonts';
 import { FontSizeKey, matchFontSize, LineHeightKey, TextAlignKey } from '../config/typography';
 import { getEditorStateProvider } from '../core/commands/EditorStateProvider';
+import { syncLexicalToRuntime } from '../core/commands/LexicalBridge';
 
 // ==========================================
 // Types
@@ -74,6 +75,10 @@ export interface EditorStateReport {
 
 /**
  * Plugin to initialize editor content from HTML
+ * 
+ * 🔴 重要：加载 HTML 后，必须同步 Lexical 状态到 DocumentRuntime
+ * 这样 AST block IDs 才能与 Lexical nodeKeys 对齐，
+ * 使得 SectionDocOps / HighlightSpans 的 nodeId 可以正确匹配 AST
  */
 const HtmlLoaderPlugin: React.FC<{ initialHtml?: string }> = ({ initialHtml }) => {
   const [editor] = useLexicalComposerContext();
@@ -90,7 +95,21 @@ const HtmlLoaderPlugin: React.FC<{ initialHtml?: string }> = ({ initialHtml }) =
           root.select();
           $insertNodes(nodes);
         }
-      });
+      }, { discrete: true });
+      
+      // 🔴 关键：HTML 加载后，同步 Lexical 状态到 DocumentRuntime
+      // 这会用 Lexical nodeKeys 更新 AST block IDs
+      // 延迟执行确保 Lexical 状态已稳定
+      setTimeout(() => {
+        try {
+          syncLexicalToRuntime(editor);
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[HtmlLoaderPlugin] ✅ Synced Lexical state to DocumentRuntime');
+          }
+        } catch (e) {
+          console.warn('[HtmlLoaderPlugin] Failed to sync to DocumentRuntime:', e);
+        }
+      }, 0);
     }
   }, [editor, initialHtml]);
 

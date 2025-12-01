@@ -16,12 +16,13 @@ describe('Command Feature Flags', () => {
   });
 
   describe('getCommandFeatureFlags', () => {
-    it('should return default flags (all false)', () => {
+    it('should return default flags (format and history enabled by default)', () => {
       const flags = getCommandFeatureFlags();
       
-      expect(flags.useCommandBusForFormat).toBe(false);
+      // 2025-12 重构：默认开启 format 和 history，走 DocOps 路径
+      expect(flags.useCommandBusForFormat).toBe(true);
       expect(flags.useCommandBusForBlockType).toBe(false);
-      expect(flags.useCommandBusForHistory).toBe(false);
+      expect(flags.useCommandBusForHistory).toBe(true);
       expect(flags.useCommandBusForEdit).toBe(false);
     });
 
@@ -56,42 +57,47 @@ describe('Command Feature Flags', () => {
 
   describe('resetCommandFeatureFlags', () => {
     it('should reset all flags to default', () => {
+      // 先改变所有值
       setCommandFeatureFlags({
-        useCommandBusForFormat: true,
+        useCommandBusForFormat: false,
         useCommandBusForBlockType: true,
-        useCommandBusForHistory: true,
+        useCommandBusForHistory: false,
         useCommandBusForEdit: true,
       });
 
       resetCommandFeatureFlags();
 
       const flags = getCommandFeatureFlags();
-      expect(flags.useCommandBusForFormat).toBe(false);
+      // 2025-12 重构：默认开启 format 和 history
+      expect(flags.useCommandBusForFormat).toBe(true);
       expect(flags.useCommandBusForBlockType).toBe(false);
-      expect(flags.useCommandBusForHistory).toBe(false);
+      expect(flags.useCommandBusForHistory).toBe(true);
       expect(flags.useCommandBusForEdit).toBe(false);
     });
   });
 
   describe('shouldUseCommandBus', () => {
-    it('should return false for all commands when flags are off', () => {
-      expect(shouldUseCommandBus('toggleBold')).toBe(false);
+    it('should return true for format and history by default (2025-12 defaults)', () => {
+      // 默认情况下 format 和 history 已开启
+      expect(shouldUseCommandBus('toggleBold')).toBe(true);
+      expect(shouldUseCommandBus('undo')).toBe(true);
+      
+      // blockType 和 edit 默认关闭
       expect(shouldUseCommandBus('setBlockTypeHeading1')).toBe(false);
-      expect(shouldUseCommandBus('undo')).toBe(false);
       expect(shouldUseCommandBus('insertText')).toBe(false);
     });
 
-    it('should return true for format commands when useCommandBusForFormat is on', () => {
-      setCommandFeatureFlags({ useCommandBusForFormat: true });
+    it('should respect format flag when explicitly set', () => {
+      // 显式关闭 format
+      setCommandFeatureFlags({ useCommandBusForFormat: false });
       
-      expect(shouldUseCommandBus('toggleBold')).toBe(true);
-      expect(shouldUseCommandBus('toggleItalic')).toBe(true);
-      expect(shouldUseCommandBus('toggleUnderline')).toBe(true);
-      expect(shouldUseCommandBus('toggleStrikethrough')).toBe(true);
+      expect(shouldUseCommandBus('toggleBold')).toBe(false);
+      expect(shouldUseCommandBus('toggleItalic')).toBe(false);
+      expect(shouldUseCommandBus('toggleUnderline')).toBe(false);
+      expect(shouldUseCommandBus('toggleStrikethrough')).toBe(false);
       
-      // Other commands should still be false
-      expect(shouldUseCommandBus('undo')).toBe(false);
-      expect(shouldUseCommandBus('insertText')).toBe(false);
+      // history 仍然开启（默认值）
+      expect(shouldUseCommandBus('undo')).toBe(true);
     });
 
     it('should return true for block type commands when useCommandBusForBlockType is on', () => {
@@ -101,19 +107,17 @@ describe('Command Feature Flags', () => {
       expect(shouldUseCommandBus('setBlockTypeHeading1')).toBe(true);
       expect(shouldUseCommandBus('setBlockTypeHeading2')).toBe(true);
       expect(shouldUseCommandBus('setBlockTypeHeading3')).toBe(true);
-      
-      // Other commands should still be false
-      expect(shouldUseCommandBus('toggleBold')).toBe(false);
     });
 
-    it('should return true for history commands when useCommandBusForHistory is on', () => {
-      setCommandFeatureFlags({ useCommandBusForHistory: true });
+    it('should respect history flag when explicitly set', () => {
+      // 显式关闭 history
+      setCommandFeatureFlags({ useCommandBusForHistory: false });
       
-      expect(shouldUseCommandBus('undo')).toBe(true);
-      expect(shouldUseCommandBus('redo')).toBe(true);
+      expect(shouldUseCommandBus('undo')).toBe(false);
+      expect(shouldUseCommandBus('redo')).toBe(false);
       
-      // Other commands should still be false
-      expect(shouldUseCommandBus('toggleBold')).toBe(false);
+      // format 仍然开启（默认值）
+      expect(shouldUseCommandBus('toggleBold')).toBe(true);
     });
 
     it('should return true for edit commands when useCommandBusForEdit is on', () => {
@@ -123,9 +127,6 @@ describe('Command Feature Flags', () => {
       expect(shouldUseCommandBus('deleteRange')).toBe(true);
       expect(shouldUseCommandBus('splitBlock')).toBe(true);
       expect(shouldUseCommandBus('insertLineBreak')).toBe(true);
-      
-      // Other commands should still be false
-      expect(shouldUseCommandBus('toggleBold')).toBe(false);
     });
 
     it('should return false for unknown commands', () => {

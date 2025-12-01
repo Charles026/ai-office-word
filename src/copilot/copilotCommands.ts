@@ -23,29 +23,43 @@ import { CopilotScope, CopilotContext } from './copilotTypes';
 // ==========================================
 
 /**
- * Copilot 命令类型
+ * Copilot 命令类型（v3 - Atomic Intent 重构）
  * 
- * 当前 MVP 支持的命令：
- * - selection 级：rewrite/summarize/translate（暂未接入）
- * - section 级：rewrite/summarize/expand
- * - document 级：summarize（暂未接入）
+ * 【v3 重构原则】
+ * 只保留原子命令，组合逻辑通过 SectionEditMacro 在 Orchestrator 层处理
+ * 
+ * 原子命令：
+ * - rewrite_section_intro / rewrite_section_chapter: 改写
+ * - summarize_section: 总结
+ * - expand_section: 扩写
+ * - highlight_section: 高亮（独立操作，不依赖改写）
+ * 
+ * 混合命令（@deprecated，保留向后兼容）：
+ * - rewrite_section_with_highlight → 使用 macro: [rewrite, highlight]
+ * - rewrite_section_with_highlight_and_summary → 使用 macro: [rewrite, highlight, summary]
  */
 export type CopilotCommand =
-  // 选区级命令
+  // ========== 选区级命令 ==========
   | 'rewrite_selection'
   | 'summarize_selection'
   | 'translate_selection'
-  // 章节级命令
+  
+  // ========== 章节级原子命令 ==========
   | 'rewrite_section_intro'    // 重写章节导语
-  | 'rewrite_section_chapter'  // 预留：整章重写
+  | 'rewrite_section_chapter'  // 整章重写
   | 'summarize_section'        // 总结章节
   | 'expand_section'           // 扩写章节
-  // 复合命令（DocEditPlan）
-  | 'rewrite_section_with_highlight'  // 改写 + 标记重点
-  | 'rewrite_section_with_highlight_and_summary'  // 改写 + 标记重点 + 摘要
-  // 独立高亮命令（只高亮，不改写）
-  | 'highlight_key_terms'  // 只标记重点词语（Primitive: HighlightKeyTerms）
-  // 文档级命令
+  | 'highlight_section'        // 🆕 独立高亮（原子操作）
+  
+  // ========== @deprecated 混合命令（向后兼容） ==========
+  /** @deprecated 使用 macro: [rewrite, highlight] 代替 */
+  | 'rewrite_section_with_highlight'
+  /** @deprecated 使用 macro: [rewrite, highlight, summary] 代替 */
+  | 'rewrite_section_with_highlight_and_summary'
+  /** @deprecated 使用 highlight_section 代替 */
+  | 'highlight_key_terms'
+  
+  // ========== 文档级命令 ==========
   | 'summarize_document';
 
 /**
@@ -94,16 +108,21 @@ export interface RuleResolvedCommand extends ResolvedCommand {
  * 命令描述映射（用于生成 action 消息）
  */
 export const COMMAND_LABELS: Record<CopilotCommand, string> = {
+  // 选区级
   rewrite_selection: '重写选区',
   summarize_selection: '总结选区',
   translate_selection: '翻译选区',
+  // 章节级原子命令
   rewrite_section_intro: '重写章节导语',
   rewrite_section_chapter: '重写整章',
   summarize_section: '总结章节',
   expand_section: '扩写章节',
+  highlight_section: '标记重点',  // 🆕 独立高亮
+  // @deprecated 混合命令（向后兼容）
   rewrite_section_with_highlight: '改写并标记重点',
   rewrite_section_with_highlight_and_summary: '改写、标记重点并生成摘要',
-  highlight_key_terms: '标记重点词语', // 独立高亮命令
+  highlight_key_terms: '标记重点词语',
+  // 文档级
   summarize_document: '总结文档',
 };
 
@@ -112,13 +131,16 @@ export const COMMAND_LABELS: Record<CopilotCommand, string> = {
  */
 export function commandNeedsSection(command: CopilotCommand): boolean {
   return [
+    // 原子命令
     'rewrite_section_intro',
     'rewrite_section_chapter',
     'summarize_section',
     'expand_section',
+    'highlight_section',  // 🆕 独立高亮
+    // @deprecated 混合命令
     'rewrite_section_with_highlight',
     'rewrite_section_with_highlight_and_summary',
-    'highlight_key_terms', // 独立高亮命令
+    'highlight_key_terms',
   ].includes(command);
 }
 
@@ -137,15 +159,18 @@ export function commandNeedsSelection(command: CopilotCommand): boolean {
  * 命令是否已实现
  */
 export function isCommandImplemented(command: CopilotCommand): boolean {
-  // 当前只实现了 section 级命令
+  // 当前已实现的 section 级命令
   return [
+    // 原子命令
     'rewrite_section_intro',
-    'rewrite_section_chapter', // 整章改写也已支持
+    'rewrite_section_chapter',
     'summarize_section',
     'expand_section',
-    'rewrite_section_with_highlight', // 改写 + 标记重点
-    'rewrite_section_with_highlight_and_summary', // 改写 + 标记重点 + 摘要
-    'highlight_key_terms', // 独立高亮命令（Primitive: HighlightKeyTerms）
+    'highlight_section',  // 🆕 独立高亮
+    // @deprecated 混合命令（通过 macro 转换后仍可用）
+    'rewrite_section_with_highlight',
+    'rewrite_section_with_highlight_and_summary',
+    'highlight_key_terms',
   ].includes(command);
 }
 

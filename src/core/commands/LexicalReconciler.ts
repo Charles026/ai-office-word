@@ -4,6 +4,7 @@
  * 【职责】
  * - 将 DocumentAst 的变更同步到 Lexical 编辑器
  * - 将 DocSelection 同步到 Lexical 选区
+ * - 同步后更新 AST block IDs 以匹配 Lexical keys
  * 
  * 【策略】
  * v1: 粗暴重渲染 - 每次变更后用 AST 全量重建 Lexical 内容
@@ -12,6 +13,11 @@
  * 【设计原则】
  * - Lexical 只是渲染器，不是 Source of Truth
  * - 所有状态变更都来自 DocumentRuntime
+ * 
+ * 🔴 【重要：AST Block ID 对齐】
+ * reconcileAstToLexical 之后，必须调用 updateAstIdsFromLexical
+ * 以确保 AST block.id == Lexical nodeKey
+ * 这是 SectionDocOps / HighlightSpans 正确工作的前提
  */
 
 import { LexicalEditor, $getRoot, $createParagraphNode, $createTextNode, $setSelection, $createRangeSelection, $isElementNode } from 'lexical';
@@ -345,5 +351,78 @@ export function reconcileAstToLexicalIncremental(
 ): void {
   // TODO: v2 实现
   console.warn('[Reconciler] Incremental reconcile not yet implemented');
+}
+
+// ==========================================
+// AST Block ID 对齐
+// ==========================================
+
+/**
+ * 将 AST block IDs 更新为对应的 Lexical nodeKeys
+ * 
+ * 🔴 重要：这是让 SectionDocOps / HighlightSpans 正确工作的关键！
+ * 
+ * 场景：
+ * 1. 从 HTML/docx 加载文档 → AST 使用 generateNodeId() 生成 ID
+ * 2. 调用 reconcileAstToLexical() → Lexical 创建节点并分配新 keys
+ * 3. 调用此函数 → 将 AST block IDs 更新为 Lexical keys
+ * 
+ * 之后，SectionDocOps 中的 targetKey（Lexical key）就能正确匹配 AST block.id
+ * 
+ * @param editor - Lexical 编辑器实例
+ * @param ast - 要更新的 DocumentAst（会被原地修改）
+ * @returns 更新后的 AST（同一个引用）
+ */
+export function updateAstIdsFromLexical(
+  editor: LexicalEditor,
+  ast: DocumentAst
+): DocumentAst {
+  editor.getEditorState().read(() => {
+    const root = $getRoot();
+    const lexicalChildren = root.getChildren();
+    
+    // 假设 Lexical 节点顺序与 AST blocks 顺序一致（v1 reconcile 保证这一点）
+    const minLength = Math.min(lexicalChildren.length, ast.blocks.length);
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Reconciler] Updating AST block IDs from Lexical keys...');
+      console.log('[Reconciler] Before:', ast.blocks.map(b => b.id));
+    }
+    
+    for (let i = 0; i < minLength; i++) {
+      const lexicalKey = lexicalChildren[i].getKey();
+      const oldId = ast.blocks[i].id;
+      
+      // 只更新不一致的 ID
+      if (oldId !== lexicalKey) {
+        ast.blocks[i].id = lexicalKey;
+      }
+    }
+    
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[Reconciler] After:', ast.blocks.map(b => b.id));
+    }
+  });
+  
+  return ast;
+}
+
+/**
+ * Reconcile + Update IDs 一站式方法
+ * 
+ * 推荐在文档加载流程中使用此方法，自动处理 ID 对齐
+ */
+export function reconcileAndAlignIds(
+  editor: LexicalEditor,
+  ast: DocumentAst,
+  options: ReconcileOptions = {}
+): DocumentAst {
+  // 1. 先同步 AST 到 Lexical
+  reconcileAstToLexical(editor, ast, options);
+  
+  // 2. 更新 AST IDs 以匹配 Lexical keys
+  updateAstIdsFromLexical(editor, ast);
+  
+  return ast;
 }
 

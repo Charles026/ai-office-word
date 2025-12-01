@@ -5,15 +5,18 @@
  * - 提供复杂意图的结构化表达（Intent → Plan → Steps）
  * - 提供 Plan 构建器和执行器
  * - 提供命令到 Intent 的适配层
+ * - 🆕 v3: 提供 Macro 执行器（Orchestrator 层）
  * 
  * 【核心概念】
  * - DocEditIntent：高层业务意图（用户想做什么）
  * - DocEditPlan：可执行计划（按什么步骤实现）
  * - DocEditPlanStep：原子操作步骤（可映射到 DocOps）
+ * - 🆕 SectionEditMacro：原子步骤组合（由 Orchestrator 展开执行）
  * 
- * 【v2 重构】
- * - Intent 使用「一个主类型 + 多个能力开关」的结构化 schema
- * - Planner 根据开关组合 Plan，不再依赖 kind 字符串
+ * 【v3 Orchestrator 重构】
+ * - 只保留原子意图，组合逻辑放在 Orchestrator 层
+ * - 每个 macro.step 独立调用对应的 SectionAI agent
+ * - highlight_section 完全独立于 rewrite_section
  */
 
 // 类型定义
@@ -79,6 +82,15 @@ export {
   getSupportedCommandKeys,
   getPresetNames,
   describePreset,
+  // 🆕 v3 Macro 类型和函数
+  type SectionEditMacro,
+  type AtomicStep,
+  type AtomicStepKind,
+  type RewriteStepParams,
+  type HighlightStepParams,
+  getMacroForCommand,
+  hasMacro,
+  describeMacro,
 } from './docEditIntentPresets';
 
 // Runtime
@@ -87,4 +99,9 @@ export {
   validatePlanForExecution,
   type DocEditPlanResult,
   type StepResult,
+  // 🆕 v3 Orchestrator
+  runMacroForCommand,
+  isMacroCommand,
+  type MacroExecutionResult,
+  type MacroExecutionContext,
 } from './docAgentRuntime';

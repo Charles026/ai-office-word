@@ -9,6 +9,12 @@
  * 【设计原则】
  * - 这是迁移期的过渡层
  * - 最终目标是让 Lexical 完全受 DocumentRuntime 驱动
+ * 
+ * 🔴 【重要：AST Block ID 约定】
+ * - AST Block.id 必须使用 **纯 Lexical nodeKey**（如 "1580"）
+ * - 不要使用前缀（如 "lexical-"）或 generateNodeId()
+ * - 这样 SectionDocOps / HighlightSpans 的 nodeId 可以直接匹配 AST
+ * - 如果修改此约定，需要同步更新 SectionDocOps adapter 和 DocumentEngine
  */
 
 import { LexicalEditor, $getSelection, $isRangeSelection, $getRoot, $isTextNode, $isElementNode, TextNode, ElementNode } from 'lexical';
@@ -135,6 +141,8 @@ export function lexicalStateToAst(): { ast: DocumentAst; keyToIdMap: Map<string,
  * 🔴 重要：
  * 1. 只接受 ElementNode（Paragraph/Heading/List），不接受 TextNode
  * 2. 必须保留每个 TextNode 的 inline marks（bold/italic/underline 等）
+ * 3. Block.id 使用纯 Lexical nodeKey，不加任何前缀！
+ *    这样 SectionDocOps / HighlightSpans 中的 nodeId 可以直接匹配 AST
  */
 function lexicalNodeToBlock(node: ElementNode): BlockNode | null {
   // 🔴 防御式编程：确保是 ElementNode
@@ -143,7 +151,9 @@ function lexicalNodeToBlock(node: ElementNode): BlockNode | null {
     return null;
   }
 
-  const key = node.getKey();
+  // 🔴 关键：使用纯 Lexical key 作为 block ID
+  // 不要使用 `lexical-${key}` 或 generateNodeId()
+  const blockId = node.getKey();
 
   // 提取子节点的 inline marks
   const children = extractInlineNodesFromLexical(node);
@@ -154,7 +164,7 @@ function lexicalNodeToBlock(node: ElementNode): BlockNode | null {
     const level = parseInt(tag.replace('h', ''), 10) as 1 | 2 | 3 | 4 | 5 | 6;
     
     return {
-      id: `lexical-${key}`,
+      id: blockId,
       type: 'heading',
       level,
       children,
@@ -163,7 +173,7 @@ function lexicalNodeToBlock(node: ElementNode): BlockNode | null {
 
   // 默认为段落
   return {
-    id: `lexical-${key}`,
+    id: blockId,
     type: 'paragraph',
     children,
   };

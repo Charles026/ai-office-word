@@ -1,21 +1,20 @@
 /**
- * DocAgent Runtime - DocEditPlan 执行器
+ * DocAgent Runtime - DocEditPlan 执行器（v3 Orchestrator 重构）
  * 
  * 【职责】
  * - 执行 DocEditPlan，将 plan.steps 映射到 Primitive 调用
+ * - 🆕 执行 SectionEditMacro，按顺序展开成原子步骤
  * - 协调 LLM 调用和文档修改
  * - 提供可追踪的执行机制
  * 
- * 【v3 Primitive 重构】
+ * 【v3 Orchestrator 重构】
+ * - 组合逻辑放在 Orchestrator 层，不在 Intent 层
+ * - 每个 macro.step 独立调用对应的 SectionAI agent
+ * - highlight_section 完全独立于 rewrite_section
  * - 统一使用 HighlightSpans primitive 处理高亮
- * - 严格信任 CanonicalIntent，移除 fallback
  */
 
-import { 
-  LexicalEditor, 
-  $getNodeByKey, 
-  $isElementNode,
-} from 'lexical';
+import { LexicalEditor } from 'lexical';
 import { 
   DocEditPlan,
   RewriteSectionStep,
@@ -35,12 +34,22 @@ import { extractSectionContext } from '../runtime/context';
 import type { SectionContext } from '../runtime/context';
 import { 
   runSectionAiAction, 
-  SectionAiOptions
+  SectionAiOptions,
+  SectionAiResult,
 } from '../actions/sectionAiActions';
+import {
+  getMacroForCommand,
+  describeMacro,
+  type AtomicStep,
+  type AtomicStepKind,
+} from './docEditIntentPresets';
 import { logAiKeySentencesMarked } from '../interaction';
 import {
   executeHighlightSpansPrimitive,
 } from './primitives';
+import { documentRuntime } from '../document';
+import { reconcileAstToLexical } from '../core/commands/LexicalReconciler';
+import { createOpMeta, type DocOp } from '../docops/types';
 
 // ==========================================
 // 执行结果类型
@@ -498,30 +507,61 @@ function splitIntoSentences(text: string): string[] {
   return sentences.filter(s => s.trim().length > 0);
 }
 
+/**
+ * 应用加粗到目标句子
+ * 
+ * 【实现方式】
+ * 通过 ToggleBold DocOps → DocumentRuntime.applyDocOps() → reconcileAstToLexical()
+ * 
+ * 这与 highlightSpans.ts 使用相同的 DocOps 写路径
+ */
 async function applyBoldToTargets(
   editor: LexicalEditor,
   targets: KeySentenceTarget[]
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    editor.update(
-      () => {
-        try {
-          for (const target of targets) {
-            const paragraphNode = $getNodeByKey(target.paragraphKey);
-            if (!paragraphNode || !$isElementNode(paragraphNode)) {
-              continue;
-            }
-            // TODO: 实现真正的句子高亮
-            // 这里暂时留空，或者使用之前的逻辑
-          }
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
-      },
-      { discrete: true }
-    );
-  });
+  if (targets.length === 0) {
+    console.log('[DocEdit] applyBoldToTargets: No targets to apply');
+    return;
+  }
+
+  // 构建 ToggleBold DocOps
+  const boldOps: DocOp[] = targets.map(t => ({
+    type: 'ToggleBold' as const,
+    payload: { 
+      nodeId: t.paragraphKey, 
+      startOffset: t.startOffset, 
+      endOffset: t.endOffset, 
+      force: true,
+    },
+    meta: createOpMeta('ai'),
+  }));
+
+  console.log('[DocEdit] applyBoldToTargets: Applying %d ToggleBold ops via DocumentRuntime', boldOps.length);
+
+  try {
+    const success = documentRuntime.applyDocOps(boldOps);
+    
+    if (success) {
+      console.log('[DocEdit] applyBoldToTargets: ✅ DocOps applied successfully');
+      
+      // 同步 AST 到 Lexical 渲染
+      const snapshot = documentRuntime.getSnapshot();
+      reconcileAstToLexical(editor, snapshot.ast, {
+        selection: snapshot.selection,
+      });
+      console.log('[DocEdit] applyBoldToTargets: ✅ Reconciled AST to Lexical');
+    } else {
+      console.warn('[DocEdit] applyBoldToTargets: ⚠️ DocumentRuntime.applyDocOps returned false');
+      console.warn('[DocEdit] Targets:', targets.map(t => ({
+        paragraphKey: t.paragraphKey,
+        startOffset: t.startOffset,
+        endOffset: t.endOffset,
+      })));
+    }
+  } catch (error) {
+    console.error('[DocEdit] applyBoldToTargets: Failed to apply DocOps:', error);
+    throw error;
+  }
 }
 
 // ==========================================
@@ -536,4 +576,233 @@ async function executeAppendBulletSummaryStep(
   console.log('[DocEdit] Executing primitive: AppendSummary', step);
   // TODO: 实现摘要逻辑，这里先占位
   console.log('[DocEdit] ✅ Step completed: append_bullet_summary');
+}
+
+// ==========================================
+// v3 Orchestrator: Macro 执行器
+// ==========================================
+
+/**
+ * Macro 执行结果
+ */
+export interface MacroExecutionResult {
+  success: boolean;
+  completedSteps: number;
+  totalSteps: number;
+  stepResults: Array<{
+    kind: AtomicStepKind;
+    success: boolean;
+    durationMs?: number;
+    error?: string;
+    intent?: CanonicalIntent;
+  }>;
+  error?: string;
+}
+
+/**
+ * Macro 执行上下文
+ */
+export interface MacroExecutionContext {
+  editor: LexicalEditor;
+  sectionId: string;
+  toast?: {
+    addToast: (message: string, type: 'success' | 'error' | 'info' | 'loading', duration?: number) => string;
+    dismissToast: (id: string) => void;
+  };
+  setAiProcessing?: (processing: boolean) => void;
+}
+
+/**
+ * 🆕 Orchestrator: 执行 SectionEditMacro
+ * 
+ * 按顺序展开 macro.steps，逐个执行原子步骤
+ * 每个步骤独立调用对应的 SectionAI agent
+ * 
+ * @param commandKey - Copilot 命令 key（如 'rewrite_section_with_highlight'）
+ * @param ctx - 执行上下文
+ * @returns MacroExecutionResult
+ * 
+ * @example
+ * ```ts
+ * // 命令 A：只改写
+ * await runMacroForCommand('rewrite_section_intro', { editor, sectionId: '1624' });
+ * // log: [DocEdit] Running rewrite_section for section: 1624
+ * 
+ * // 命令 B：改写并标重点
+ * await runMacroForCommand('rewrite_section_with_highlight', { editor, sectionId: '1624' });
+ * // log: [DocEdit] Running rewrite_section for section: 1624
+ * // log: [DocEdit] Running highlight_section for section: 1624
+ * ```
+ */
+export async function runMacroForCommand(
+  commandKey: string,
+  ctx: MacroExecutionContext
+): Promise<MacroExecutionResult> {
+  const macro = getMacroForCommand(commandKey);
+  
+  if (!macro) {
+    console.error('[DocEdit] No macro found for command:', commandKey);
+    return {
+      success: false,
+      completedSteps: 0,
+      totalSteps: 0,
+      stepResults: [],
+      error: `No macro found for command: ${commandKey}`,
+    };
+  }
+  
+  console.log('[DocEdit] ========== Macro Execution Start ==========');
+  console.log('[DocEdit] Command:', commandKey);
+  console.log('[DocEdit] Macro:', describeMacro(macro));
+  console.log('[DocEdit] Section:', ctx.sectionId);
+  console.log('[DocEdit] Steps:', macro.steps.map(s => s.kind).join(' → '));
+  
+  const stepResults: MacroExecutionResult['stepResults'] = [];
+  let latestIntent: CanonicalIntent | undefined;
+  
+  // 按顺序执行每个原子步骤
+  for (let i = 0; i < macro.steps.length; i++) {
+    const step = macro.steps[i];
+    const startTime = Date.now();
+    
+    console.log(`[DocEdit] -------- Step ${i + 1}/${macro.steps.length}: ${step.kind} --------`);
+    console.log(`[DocEdit] Running ${step.kind} for section: ${ctx.sectionId}`);
+    
+    try {
+      const result = await executeAtomicStep(step, ctx, latestIntent);
+      
+      stepResults.push({
+        kind: step.kind,
+        success: result.success,
+        durationMs: Date.now() - startTime,
+        intent: result.intent,
+      });
+      
+      if (!result.success) {
+        console.error(`[DocEdit] ❌ Step ${step.kind} failed:`, result.error);
+        return {
+          success: false,
+          completedSteps: i,
+          totalSteps: macro.steps.length,
+          stepResults,
+          error: result.error,
+        };
+      }
+      
+      // 保存 intent 供后续步骤使用（如 highlight 需要 rewrite 的结果）
+      if (result.intent) {
+        latestIntent = result.intent;
+      }
+      
+      console.log(`[DocEdit] ✅ Step ${step.kind} completed in ${Date.now() - startTime}ms`);
+      
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[DocEdit] ❌ Step ${step.kind} threw exception:`, error);
+      
+      stepResults.push({
+        kind: step.kind,
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: errorMessage,
+      });
+      
+      return {
+        success: false,
+        completedSteps: i,
+        totalSteps: macro.steps.length,
+        stepResults,
+        error: errorMessage,
+      };
+    }
+  }
+  
+  console.log('[DocEdit] ========== Macro Execution Complete ==========');
+  console.log('[DocEdit] All', macro.steps.length, 'steps completed successfully');
+  
+  return {
+    success: true,
+    completedSteps: macro.steps.length,
+    totalSteps: macro.steps.length,
+    stepResults,
+  };
+}
+
+/**
+ * 执行单个原子步骤
+ * 
+ * @param step - 原子步骤定义
+ * @param ctx - 执行上下文
+ * @param contextIntent - 前置步骤的 Intent（用于传递上下文）
+ */
+async function executeAtomicStep(
+  step: AtomicStep,
+  ctx: MacroExecutionContext,
+  _contextIntent?: CanonicalIntent
+): Promise<SectionAiResult> {
+  const { editor, sectionId, toast, setAiProcessing } = ctx;
+  
+  // 构建 SectionAI 调用上下文
+  const aiContext = {
+    editor,
+    toast: toast || mockToast as any,
+    setAiProcessing,
+  };
+  
+  // 根据 step.kind 映射到 SectionAI action
+  switch (step.kind) {
+    case 'rewrite_section':
+      console.log('[DocEdit] Executing atomic step: rewrite_section');
+      return runSectionAiAction('rewrite', sectionId, aiContext, {
+        rewrite: {
+          tone: step.params?.tone,
+          scope: step.params?.scope,
+        },
+      });
+      
+    case 'highlight_section':
+      console.log('[DocEdit] Executing atomic step: highlight_section (independent of rewrite)');
+      // 🆕 highlight_section 完全独立于 rewrite
+      // 调用 SectionAI 的 highlight agent（intent-only）
+      return runSectionAiAction('highlight', sectionId, aiContext, {
+        highlight: {
+          mode: step.params?.mode || 'terms',
+          termCount: step.params?.termCount || 5,
+          style: step.params?.style || 'bold',
+        },
+      });
+      
+    case 'summarize_section':
+      console.log('[DocEdit] Executing atomic step: summarize_section');
+      return runSectionAiAction('summarize', sectionId, aiContext, {
+        summarize: {
+          // bulletCount 通过 customPrompt 传递，因为 SummarizeSectionOptions 没有这个字段
+          customPrompt: step.params?.bulletCount 
+            ? `生成 ${step.params.bulletCount} 条要点摘要`
+            : undefined,
+        },
+      });
+      
+    case 'expand_section':
+      console.log('[DocEdit] Executing atomic step: expand_section');
+      return runSectionAiAction('expand', sectionId, aiContext, {
+        expand: {
+          length: step.params?.length || 'medium',
+        },
+      });
+      
+    default:
+      console.error('[DocEdit] Unknown atomic step kind:', (step as any).kind);
+      return {
+        success: false,
+        error: `Unknown atomic step kind: ${(step as any).kind}`,
+      };
+  }
+}
+
+/**
+ * 检查命令是否支持 Macro 执行
+ */
+export function isMacroCommand(commandKey: string): boolean {
+  return !!getMacroForCommand(commandKey);
 }

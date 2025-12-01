@@ -16,7 +16,12 @@
 // ==========================================
 
 /**
- * Agent 操作类型
+ * Agent 操作类型（v3 - Atomic Intent 重构）
+ * 
+ * 【v3 设计原则】
+ * - 只保留原子操作，不包含混合操作
+ * - 组合逻辑由 Orchestrator（runMacroForCommand）处理
+ * - highlight_section 完全独立于 rewrite_section
  * 
  * 命名规则：
  * - 选区级操作：不带后缀（rewrite, translate, summarize）
@@ -24,11 +29,11 @@
  * - 文档级操作：带 '_document' 后缀（预留）
  */
 export type AgentKind =
-  // ========== Section 级操作（当前任务核心） ==========
-  | 'rewrite_section'      // 重写 section
-  | 'summarize_section'    // 总结 section
-  | 'expand_section'       // 扩写 section
-  | 'highlight_section'    // 🆕 只高亮 section（不改写）
+  // ========== Section 级原子操作 ==========
+  | 'rewrite_section'      // 重写 section（原子操作）
+  | 'summarize_section'    // 总结 section（原子操作）
+  | 'expand_section'       // 扩写 section（原子操作）
+  | 'highlight_section'    // 高亮 section（原子操作，完全独立）
   
   // ========== 选区级操作 ==========
   | 'rewrite'              // 重写选区
@@ -42,22 +47,6 @@ export type AgentKind =
   
   // ========== 版本/对比操作（预留） ==========
   | 'compare_versions'     // 版本对比
-  
-  // ========== 语义 Section 操作（预留） ==========
-  // TODO: 未来可扩展
-  // | 'identify_requirements'  // 自动识别需求段
-  // | 'identify_features'      // 自动识别功能段
-  // | 'semantic_section'       // 语义 section 分析
-  
-  // ========== Outline 级操作（预留） ==========
-  // TODO: 未来可扩展
-  // | 'restructure_outline'    // 重构大纲
-  // | 'optimize_outline'       // 优化大纲结构
-  
-  // ========== Agent 工具链（预留） ==========
-  // TODO: 未来可扩展
-  // | 'agent_chain'            // Agent 工具链调用
-  // | 'multi_step_edit'        // 多步编辑
   ;
 
 // ==========================================

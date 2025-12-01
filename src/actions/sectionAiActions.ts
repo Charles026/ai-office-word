@@ -78,11 +78,74 @@ import {
 } from './highlightExecution';
 
 // ==========================================
+// DocOps 适配层导入（用于新的 DocumentEngine 写路径）
+// ==========================================
+import { convertSectionOpsToDocOps } from '../docops/adapter';
+import { documentRuntime } from '../document/DocumentRuntime';
+import { reconcileAstToLexical } from '../core/commands/LexicalReconciler';
+
+// ==========================================
+// Feature Flag：控制是否使用 DocumentEngine 路径
+// ==========================================
+
+/**
+ * 是否使用 DocumentEngine 路径应用 SectionDocOps
+ * 
+ * - true: SectionDocOps → DocOps → DocumentRuntime.applyDocOps() → Reconciler
+ * - false: 直接操作 Lexical（旧路径，将被废弃）
+ * 
+ * 【迁移计划】
+ * 1. 初始值 false，保持现有行为 ✅
+ * 2. 测试通过后改为 true ✅ 当前状态
+ * 3. 最终删除旧路径代码
+ * 
+ * 2025-12-01: Block ID 对齐修复完成，启用 DocumentRuntime 路径
+ */
+let useSectionDocOpsViaDocumentEngine = true;
+
+/**
+ * 设置是否使用 DocumentEngine 路径
+ * 
+ * @internal 仅供测试和调试使用
+ */
+export function setSectionDocOpsViaDocumentEngine(enabled: boolean): void {
+  useSectionDocOpsViaDocumentEngine = enabled;
+  console.log('[SectionAI] useSectionDocOpsViaDocumentEngine =', enabled);
+}
+
+/**
+ * 获取当前配置
+ */
+export function getSectionDocOpsViaDocumentEngine(): boolean {
+  return useSectionDocOpsViaDocumentEngine;
+}
+
+// DEV 模式下暴露到 window 方便调试
+if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+  (window as any).__sectionAiFlags = {
+    get: getSectionDocOpsViaDocumentEngine,
+    set: setSectionDocOpsViaDocumentEngine,
+    enableDocumentEngine: () => setSectionDocOpsViaDocumentEngine(true),
+    disableDocumentEngine: () => setSectionDocOpsViaDocumentEngine(false),
+  };
+  
+  // 导入 devTools（仅开发模式）
+  import('./sectionAiDevTools').catch(() => {
+    console.warn('[SectionAI] Failed to load devTools');
+  });
+}
+
+// ==========================================
 // 类型定义
 // ==========================================
 
 /**
- * Section AI 操作类型
+ * Section AI 操作类型（v3 原子操作）
+ * 
+ * 【v3 设计原则】
+ * - 每个操作类型是原子的，不包含组合逻辑
+ * - highlight 完全独立于 rewrite，可单独调用
+ * - 组合逻辑由 Orchestrator（docAgentRuntime.runMacroForCommand）处理
  */
 export type SectionAiAction = 'rewrite' | 'summarize' | 'expand' | 'highlight';
 
@@ -225,6 +288,32 @@ function getSuccessMessage(action: SectionAiAction): string {
     highlight: '重点已标记',
   };
   return messages[action];
+}
+
+/**
+ * 规范化 sectionId
+ * 
+ * Copilot 规则层可能产生形如 `sec-1624` 的逻辑 sectionId，
+ * 但 extractSectionContext / AST / DocumentEngine 只认纯数字 ID。
+ * 
+ * 此函数将 `sec-1624` 转换为 `1624`，保持纯数字 ID 不变。
+ * 
+ * @param rawId - 原始 sectionId（可能是 'sec-1624' 或 '1624'）
+ * @returns 规范化后的 sectionId
+ */
+function normalizeSectionId(rawId: string | null | undefined): string | null | undefined {
+  if (!rawId) return rawId;
+
+  // 约定：sec-<数字> => <数字>
+  if (rawId.startsWith('sec-')) {
+    const maybeId = rawId.slice(4);
+    // 只处理纯数字，避免误伤未来类似 sec-overview 这样的逻辑 ID
+    if (/^\d+$/.test(maybeId)) {
+      return maybeId;
+    }
+  }
+
+  return rawId;
 }
 
 /**
@@ -511,29 +600,149 @@ function parseStructuredLlmResponse(text: string): ParsedSectionAiProtocol {
 
 /**
  * 应用 DocOps 到编辑器
+ * 
+ * 【新架构】(当 useSectionDocOpsViaDocumentEngine=true)
+ * SectionDocOps → convertSectionOpsToDocOps() → DocumentRuntime.applyDocOps() → Reconciler
+ * 
+ * 【旧架构】(当 useSectionDocOpsViaDocumentEngine=false)
+ * SectionDocOps → 直接操作 Lexical 节点 (将被废弃)
  */
 export async function applyDocOps(
   editor: LexicalEditor,
   docOps: SectionDocOp[]
 ): Promise<void> {
-  // TODO(docops-boundary):
-  // - 这里直接操作 Lexical 节点，绕过了 DocumentEngine 和 CommandBus
-  // - 目标：将 DocOps 转换为标准 DocumentEngine 调用，或通过 CommandBus 执行
-  // - 目前仅标记，保留 Lexical 操作以维持 UI 功能
+  // ============================================================
+  // ✅ NEW PATH: 通过 DocumentEngine 应用 DocOps
+  // ============================================================
+  if (useSectionDocOpsViaDocumentEngine) {
+    console.log('[SectionAI] ✅ Using DocumentEngine path for', docOps.length, 'SectionDocOps');
+    
+    // 获取当前 docId / sectionId 用于调试
+    const debugContext = copilotStore.getContext();
+    const docId = debugContext?.docId ?? 'unknown';
+    
+    // 1. 转换 SectionDocOps → 标准 DocOps
+    const standardOps = convertSectionOpsToDocOps(docOps, 'ai');
+    console.log('[SectionAI] Converted to', standardOps.length, 'standard DocOps');
+    
+    // 打印详细的转换结果用于调试
+    console.log('[SectionAI] 🔍 Debug: SectionDocOps →', 
+      docOps.map(op => ({
+        type: op.type,
+        targetKey: (op as any).targetKey || (op as any).referenceKey,
+        newText: (op as any).newText?.slice(0, 50) + '...',
+      }))
+    );
+    console.log('[SectionAI] 🔍 Debug: Standard DocOps →', 
+      standardOps.map(op => ({
+        type: op.type,
+        nodeId: (op.payload as any).nodeId || (op.payload as any).afterNodeId,
+        text: (op.payload as any).text?.slice(0, 50) + '...',
+      }))
+    );
+    
+    // 打印当前 AST 的 block IDs，用于对比
+    const currentSnapshot = documentRuntime.getSnapshot();
+    console.log('[SectionAI] 🔍 Debug: Current AST block IDs →', 
+      currentSnapshot.ast.blocks.map(b => b.id)
+    );
+    
+    try {
+      // 2. 通过 DocumentRuntime 应用
+      const success = documentRuntime.applyDocOps(standardOps);
+      
+      if (success) {
+        console.log('[SectionAI] ✅ DocumentRuntime.applyDocOps succeeded');
+        
+        // 3. 同步 AST 到 Lexical 渲染
+        const snapshot = documentRuntime.getSnapshot();
+        reconcileAstToLexical(editor, snapshot.ast, {
+          selection: snapshot.selection,
+        });
+        console.log('[SectionAI] ✅ Reconciled AST to Lexical');
+      } else {
+        // applyDocOps 返回 false，说明没有变更（可能是 block 找不到）
+        const errorDetail = {
+          docId,
+          sectionDocOps: docOps.map(op => ({
+            type: op.type,
+            targetKey: (op as any).targetKey || (op as any).referenceKey,
+          })),
+          standardOps: standardOps.map(op => ({
+            type: op.type,
+            nodeId: (op.payload as any).nodeId || (op.payload as any).afterNodeId,
+          })),
+          astBlockIds: currentSnapshot.ast.blocks.map(b => b.id),
+          possibleCause: 'Block ID mismatch: SectionDocOps uses Lexical nodeKey, but AST uses generated nodeId',
+        };
+        
+        console.error('[SectionAI] ❌ DocumentRuntime.applyDocOps returned false');
+        console.error('[SectionAI] 🔍 Error detail:', JSON.stringify(errorDetail, null, 2));
+        
+        throw new Error(
+          `DocumentRuntime.applyDocOps failed: Block IDs not found in AST. ` +
+          `Lexical keys: [${docOps.map(op => (op as any).targetKey || (op as any).referenceKey).join(', ')}], ` +
+          `AST IDs: [${currentSnapshot.ast.blocks.map(b => b.id).join(', ')}]`
+        );
+      }
+      
+      return;
+    } catch (err) {
+      // 捕获异常并打印详细信息
+      const error = err as Error;
+      console.error('[SectionAI] ❌ DocumentEngine path threw exception');
+      console.error('[SectionAI] 🔍 Error name:', error.name);
+      console.error('[SectionAI] 🔍 Error message:', error.message);
+      console.error('[SectionAI] 🔍 Error stack:', error.stack);
+      console.error('[SectionAI] 🔍 Context:', {
+        docId,
+        sectionDocOpsCount: docOps.length,
+        standardOpsCount: standardOps.length,
+      });
+      
+      // ============================================================
+      // 🔄 FALLBACK: 自动回退到 legacy 路径
+      // ============================================================
+      console.warn('[SectionAI] ⚠️ DocEnginePathFailed - Falling back to legacy Lexical path');
+      console.warn('[SectionAI] Telemetry: DocEnginePathFailed', {
+        docId,
+        errorMessage: error.message,
+        sectionDocOpsTypes: docOps.map(op => op.type),
+      });
+      
+      // 调用 legacy 路径（递归调用，但会走 else 分支）
+      const originalFlag = useSectionDocOpsViaDocumentEngine;
+      useSectionDocOpsViaDocumentEngine = false;
+      try {
+        await applyDocOps(editor, docOps);
+        console.log('[SectionAI] ✅ Legacy fallback succeeded');
+      } finally {
+        useSectionDocOpsViaDocumentEngine = originalFlag;
+      }
+      
+      return;
+    }
+  }
 
-  // 使用 Lexical 的 update 方法应用修改
+  // ============================================================
+  // 🚨 LEGACY PATH: 直接操作 Lexical (将被废弃)
+  // 
+  // 当 useSectionDocOpsViaDocumentEngine=false 时使用
+  // TODO: 测试通过后删除此分支
+  // ============================================================
   return new Promise((resolve, reject) => {
     editor.update(
       () => {
         try {
+          console.warn('[SectionAI] ⚠️ LEGACY PATH: Applying DocOps directly to Lexical (bypassing DocumentEngine)');
           console.log('[SectionAI] Applying DocOps:', docOps.length);
           
           for (const op of docOps) {
             console.log('[SectionAI] DocOp:', op.type, op);
             
             if (op.type === 'replace_paragraph') {
+              // 🚨 BYPASSING DocumentEngine: 直接替换 Lexical 节点内容
               const replaceOp = op as ReplaceParagraphOp;
-              // 替换段落
               const node = $getNodeByKey(replaceOp.targetKey);
               if (node && $isElementNode(node)) {
                 // 尝试获取第一个文本节点的样式，以便继承
@@ -558,8 +767,8 @@ export async function applyDocOps(
                 console.warn('[SectionAI] Replace target not found or invalid:', replaceOp.targetKey);
               }
             } else if (op.type === 'insert_paragraph_after') {
+              // 🚨 BYPASSING DocumentEngine: 直接向 Lexical 插入新段落
               const insertOp = op as InsertParagraphAfterOp;
-              // 在目标后插入新段落
               const targetNode = $getNodeByKey(insertOp.referenceKey);
               if (targetNode) {
                 const newParagraph = $createParagraphNode();
@@ -573,7 +782,7 @@ export async function applyDocOps(
                 console.warn('[SectionAI] Insert target not found:', insertOp.referenceKey);
               }
             } else if (op.type === 'delete_paragraph') {
-              // 删除段落
+              // 🚨 BYPASSING DocumentEngine: 直接从 Lexical 删除段落
               const node = $getNodeByKey(op.targetKey);
               if (node) {
                 node.remove();
@@ -622,13 +831,21 @@ export async function applyDocOps(
  */
 export async function runSectionAiAction(
   action: SectionAiAction,
-  sectionId: string,
+  rawSectionId: string,
   context: SectionAiContext,
   options?: SectionAiOptions
 ): Promise<SectionAiResult> {
   const { editor, toast, setAiProcessing: setProcessing } = context;
   const { addToast, dismissToast } = toast;
   const actionLabel = getActionLabel(action);
+
+  // 规范化 sectionId：将 'sec-1624' 转换为 '1624'
+  const sectionId = normalizeSectionId(rawSectionId) ?? rawSectionId;
+  
+  // 调试日志：如果发生了规范化转换
+  if (rawSectionId !== sectionId) {
+    console.log('[SectionAI] Normalized sectionId from %s to %s', rawSectionId, sectionId);
+  }
 
   // 检查是否已有任务在运行
   if (_isAiProcessing) {
@@ -862,11 +1079,44 @@ export async function runSectionAiAction(
       };
     }
     
-    // 🆕 highlight action 只需要返回 intent，不需要处理段落
+    // 🆕 v3: highlight action 完全独立于 rewrite
+    // 只调用 highlight agent（intent-only），获取 terms，然后应用高亮
     if (action === 'highlight') {
-      console.log('[SectionAI] Highlight action - returning intent only (no paragraph processing)');
+      console.log('[SectionAI] ========== Highlight Action (Independent) ==========');
+      console.log('[SectionAI] Section:', sectionId);
+      console.log('[SectionAI] Mode:', options?.highlight?.mode || 'terms');
+      console.log('[SectionAI] Style:', options?.highlight?.style || 'bold');
+      
+      // 从 intent 中提取 terms
+      const markKeyTermsTask = protocolOutput.canonicalIntent.tasks.find(
+        t => t.type === 'mark_key_terms'
+      );
+      
+      if (markKeyTermsTask && markKeyTermsTask.params) {
+        const params = markKeyTermsTask.params as any;
+        const terms = params.terms || params.targets || [];
+        const style = params.style || options?.highlight?.style || 'bold';
+        
+        console.log('[SectionAI] Found', terms.length, 'terms from LLM');
+        console.log('[SectionAI] Terms:', terms.map((t: any) => t.phrase).slice(0, 5));
+        
+        // 调用 executeHighlightSpansPrimitive 应用高亮
+        if (terms.length > 0) {
+          const { executeHighlightSpansPrimitive } = await import('../docAgent/primitives/highlightSpans');
+          await executeHighlightSpansPrimitive(editor, {
+            sectionId,
+            target: 'key_terms',
+            style,
+            terms,
+          });
+          console.log('[SectionAI] ✅ Highlight applied successfully');
+        }
+      } else {
+        console.log('[SectionAI] No mark_key_terms task found in intent');
+      }
+      
       dismissToast(loadingToastId);
-      addToast('已识别重点词语', 'success');
+      addToast('已标记重点词语', 'success');
       commitSnapshot();
       
       return {
@@ -877,7 +1127,7 @@ export async function runSectionAiAction(
         responseMode: 'auto_apply',
         confidence,
         uncertainties,
-        applied: false,
+        applied: true, // 🆕 标记为已应用
       };
     }
 

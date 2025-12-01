@@ -41,13 +41,17 @@ export interface CommandFeatureFlags {
 /**
  * 默认 feature flags
  * 
- * 初始状态：全部关闭，使用旧路径
+ * 【2025-12 重构】
+ * - useCommandBusForFormat: true（加粗/斜体/下划线走 CommandBus → DocOps）
+ * - useCommandBusForHistory: true（撤销/重做走 DocumentEngine 历史）
+ * - useCommandBusForBlockType: false（标题级别暂时保持旧路径）
+ * - useCommandBusForEdit: false（文本输入保持旧路径，避免影响输入体验）
  */
 const defaultFlags: CommandFeatureFlags = {
-  useCommandBusForFormat: false,
-  useCommandBusForBlockType: false,
-  useCommandBusForHistory: false,
-  useCommandBusForEdit: false,
+  useCommandBusForFormat: true,  // ✅ 默认开启，走 DocOps
+  useCommandBusForBlockType: false, // 暂不开启
+  useCommandBusForHistory: true,  // ✅ 默认开启，使用 DocumentEngine 历史
+  useCommandBusForEdit: false, // 暂不开启，影响输入体验
 };
 
 /**
@@ -129,6 +133,41 @@ if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
     set: setCommandFeatureFlags,
     reset: resetCommandFeatureFlags,
     shouldUse: shouldUseCommandBus,
+  };
+}
+
+// ==========================================
+// 导出辅助函数：检查 DocOps 边界状态
+// ==========================================
+
+/**
+ * 获取 DocOps 边界状态摘要
+ * 
+ * 用于调试和日志，显示当前哪些操作走 DocOps 路径
+ */
+export function getDocOpsBoundaryStatus(): {
+  format: boolean;
+  blockType: boolean;
+  history: boolean;
+  edit: boolean;
+  summary: string;
+} {
+  const flags = getCommandFeatureFlags();
+  const enabled = [
+    flags.useCommandBusForFormat && 'format',
+    flags.useCommandBusForBlockType && 'blockType',
+    flags.useCommandBusForHistory && 'history',
+    flags.useCommandBusForEdit && 'edit',
+  ].filter(Boolean) as string[];
+  
+  return {
+    format: flags.useCommandBusForFormat,
+    blockType: flags.useCommandBusForBlockType,
+    history: flags.useCommandBusForHistory,
+    edit: flags.useCommandBusForEdit,
+    summary: enabled.length > 0 
+      ? `DocOps enabled for: ${enabled.join(', ')}`
+      : 'All commands using legacy Lexical path',
   };
 }
 

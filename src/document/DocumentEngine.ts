@@ -355,6 +355,19 @@ export class DocumentEngine {
 
   private handleToggleBold(ast: DocumentAst, op: ToggleBoldOp): ApplyOpsResult {
     const { nodeId, startOffset, endOffset, force } = op.payload;
+    
+    // 🔍 调试日志：确认 ToggleBold 被执行
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DocumentEngine] Applying ToggleBold: nodeId="${nodeId}", startOffset=${startOffset}, endOffset=${endOffset}, force=${force}`);
+      
+      // 检查 block 是否存在
+      const block = findBlockById(ast, nodeId);
+      if (!block) {
+        console.warn(`[DocumentEngine] ⚠️ ToggleBold target block NOT FOUND: nodeId="${nodeId}"`);
+        console.warn(`[DocumentEngine] Available block IDs:`, ast.blocks.map(b => b.id));
+      }
+    }
+    
     return this.applyInlineMark(ast, nodeId, startOffset, endOffset, 'bold', force);
   }
 
@@ -376,6 +389,11 @@ export class DocumentEngine {
   ): ApplyOpsResult {
     const block = findBlockById(ast, nodeId);
     if (!block || !hasInlineChildren(block)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.warn(`[DocumentEngine] ⚠️ applyInlineMark failed: block not found or no inline children`);
+        console.warn(`[DocumentEngine] Requested nodeId: "${nodeId}"`);
+        console.warn(`[DocumentEngine] Block found: ${!!block}, hasInlineChildren: ${block ? hasInlineChildren(block) : 'N/A'}`);
+      }
       return { nextAst: ast, changed: false };
     }
 
