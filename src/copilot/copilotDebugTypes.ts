@@ -70,6 +70,13 @@ export interface CopilotDebugSnapshot {
   error?: string;
   /** 是否使用了 DocContextEnvelope */
   usedEnvelope: boolean;
+  /** 🆕 structure-stats-sot v1.5: 短路信息（未走 LLM） */
+  shortCircuit?: {
+    type: 'structural_query' | 'clarification_needed';
+    kind: string;
+    answer?: string;
+    question?: string;
+  };
 }
 
 // ==========================================

@@ -83,3 +83,21 @@ export {
   replaceSectionContent,
 } from './section';
 
+// DocStructureEngine (v1.2)
+export type {
+  SectionNode,
+  ParagraphRole,
+  DocStructureSnapshot,
+  DocStructureMeta,
+  BuildDocStructureOptions,
+} from './structure';
+
+export {
+  buildDocStructure,
+  buildDocStructureFromEditor,
+  buildDocStructureFromAst,
+  findSectionById,
+  findSectionByBlockId,
+  findSectionContainingBlock,
+  getOutlineFromSnapshot,
+} from './structure';

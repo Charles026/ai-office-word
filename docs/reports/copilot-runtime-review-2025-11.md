@@ -278,3 +278,34 @@ type CopilotErrorCode = 'intent_missing' | 'invalid_intent_json' | 'section_not_
 - **v1.2**：支持 H1/H2/H3 全语义章节 + 完善的错误状态和 Telemetry
 - **v1.3**：支持连续提问 (lastEditContext) + 写入闭环验证
 
+---
+
+## v1.4 更新：DocStructureEngine (2025-11)
+
+### 新增模块
+
+引入了 **DocStructureEngine** 作为独立的结构理解层：
+
+```
+src/document/structure/
+├── DocStructureEngine.ts      # 核心实现
+├── index.ts                   # 模块导出
+└── __tests__/
+    └── DocStructureEngine.test.ts  # 26 个测试用例
+```
+
+### 核心能力
+
+1. **章节树构建**：从 AST 构建 `SectionNode[]` 树结构
+2. **段落角色分配**：为每个 block 分配 `ParagraphRole`（doc_title / section_title / body / meta 等）
+3. **查询辅助**：`findSectionById`、`findSectionContainingBlock`、`getOutlineFromSnapshot`
+
+### 与 Copilot 的集成
+
+- `extractSectionContext` 新增 `getDocStructureSnapshot` 和 `extractSectionContextFromStructure`
+- 为未来的结构智能化预留接口
+- 保留原有逻辑作为 fallback
+
+### 相关文档
+
+详见 [docs/doc-structure-design.md](../doc-structure-design.md)

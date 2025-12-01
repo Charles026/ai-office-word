@@ -14,6 +14,11 @@ export {
   getSectionFullText,
   isSectionEmpty,
   getSectionStats,
+  // DocStructureEngine 集成 (v1.2)
+  getDocStructureSnapshot,
+  extractSectionContextFromStructure,
+  isSectionIdValid,
+  getSectionParagraphRoles,
 } from './extractSectionContext';
 
 // Scope helpers

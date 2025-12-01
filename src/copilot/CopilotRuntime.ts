@@ -43,6 +43,12 @@ import { copilotStore } from './copilotStore';
 import { copilotDebugStore } from './copilotDebugStore';
 import { generateDebugId } from './copilotDebugTypes';
 import type { CopilotDebugSnapshot, DebugMessage } from './copilotDebugTypes';
+import {
+  resolveStructuralQuery,
+  isStructuralQuery,
+  canDirectAnswer,
+  needsClarification,
+} from './structuralQueryResolver';
 
 // ==========================================
 // 常量
@@ -108,6 +114,379 @@ function parseChineseOrArabicNumber(str: string): number | null {
   };
   
   return chineseMap[str] ?? null;
+}
+
+// ==========================================
+// 自然语言章节引用解析 (v1.3 新增)
+// ==========================================
+
+/**
+ * 章节引用解析结果
+ */
+export interface SectionResolutionResult {
+  /** 解析到的章节 ID */
+  sectionId?: string;
+  /** 解析原因/方法 */
+  reason: 'exact_title' | 'partial_title' | 'index' | 'keyword' | 'not_found';
+  /** 匹配置信度 (0-1) */
+  confidence?: number;
+  /** 调试信息 */
+  debugInfo?: string;
+}
+
+/**
+ * 从用户自然语言中解析章节引用
+ * 
+ * 基于 DocSkeleton 进行结构化匹配，不依赖 LLM 猜测。
+ * 
+ * 匹配优先级：
+ * 1. 精确匹配标题（忽略大小写、前后空格）
+ * 2. 根据"第X章/节"的中文表达 + index 映射
+ * 3. 关键字匹配（如 "概述" → title 包含 Overview/概述 的 chapter）
+ * 4. 模糊匹配标题（包含查询字符串）
+ * 
+ * @param args.userText - 用户输入的自然语言
+ * @param args.skeleton - 文档骨架结构
+ * @param args.lastSectionId - 上次编辑的章节 ID（用于相对引用）
+ * @param args.langHint - 语言提示
+ */
+export function resolveSectionByUserText(args: {
+  userText: string;
+  skeleton: import('../document/structure').DocSkeleton;
+  lastSectionId?: string | null;
+  langHint?: 'zh' | 'en' | 'mixed' | 'other';
+}): SectionResolutionResult {
+  const { userText, skeleton, lastSectionId, langHint = skeleton.meta.languageHint } = args;
+  const text = userText.toLowerCase().trim();
+  
+  // 扁平化章节列表便于遍历
+  const flatSections = flattenDocSkeletonLocal(skeleton);
+  
+  if (flatSections.length === 0) {
+    return { reason: 'not_found', debugInfo: 'skeleton is empty' };
+  }
+  
+  // 1. 尝试按索引匹配："第一章"、"第二节"、"第 3 章"
+  const indexResult = resolveByIndex(text, flatSections, langHint);
+  if (indexResult) {
+    return indexResult;
+  }
+  
+  // 2. 尝试精确匹配标题
+  const exactResult = resolveByExactTitle(text, flatSections);
+  if (exactResult) {
+    return exactResult;
+  }
+  
+  // 3. 尝试关键字匹配（概述、结论等）
+  const keywordResult = resolveByKeyword(text, flatSections);
+  if (keywordResult) {
+    return keywordResult;
+  }
+  
+  // 4. 尝试模糊匹配标题
+  const fuzzyResult = resolveByFuzzyTitle(text, flatSections);
+  if (fuzzyResult) {
+    return fuzzyResult;
+  }
+  
+  // 5. 尝试相对引用："上一章"、"下一节"
+  if (lastSectionId) {
+    const relativeResult = resolveByRelative(text, flatSections, lastSectionId);
+    if (relativeResult) {
+      return relativeResult;
+    }
+  }
+  
+  return { reason: 'not_found', debugInfo: `no match for: ${text.slice(0, 50)}` };
+}
+
+/**
+ * 扁平化 DocSkeleton（本地版本，避免循环依赖）
+ */
+function flattenDocSkeletonLocal(
+  skeleton: import('../document/structure').DocSkeleton
+): import('../document/structure').DocSectionSkeleton[] {
+  const result: import('../document/structure').DocSectionSkeleton[] = [];
+  
+  function traverse(section: import('../document/structure').DocSectionSkeleton) {
+    result.push(section);
+    for (const child of section.children) {
+      traverse(child);
+    }
+  }
+  
+  for (const section of skeleton.sections) {
+    traverse(section);
+  }
+  
+  return result;
+}
+
+/**
+ * 按索引解析：匹配 "第 N 章/节"
+ * 
+ * 注意：需要排除相对引用如 "上一章"、"下一章"
+ */
+function resolveByIndex(
+  text: string,
+  sections: import('../document/structure').DocSectionSkeleton[],
+  langHint?: string
+): SectionResolutionResult | null {
+  // 排除相对引用模式
+  if (/(上一|下一|前一|后一|最后)(章|节|部分)/.test(text)) {
+    return null;
+  }
+  
+  // 中文模式：匹配 "第一章"、"第二节"、"第 3 部分"
+  const zhPatterns = [
+    /第\s*([一二三四五六七八九十\d]+)\s*(章|节|部分|小节)/,
+  ];
+  
+  // 英文模式：匹配 "chapter 1"、"section 2"
+  const enPatterns = [
+    /chapter\s*(\d+)/i,
+    /section\s*(\d+)/i,
+    /part\s*(\d+)/i,
+  ];
+  
+  const patterns = langHint === 'en' ? [...enPatterns, ...zhPatterns] : [...zhPatterns, ...enPatterns];
+  
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const indexStr = match[1];
+      const index = parseChineseOrArabicNumber(indexStr);
+      if (index === null || index <= 0) continue;
+      
+      // 确定要查找的角色类型
+      const unitText = match[2]?.toLowerCase() || '';
+      let roleFilter: string | null = null;
+      
+      if (/章|chapter/.test(unitText)) {
+        roleFilter = 'chapter';
+      } else if (/节|section|小节/.test(unitText)) {
+        roleFilter = 'section';
+      }
+      
+      // 在匹配的角色类型中查找第 N 个
+      let count = 0;
+      for (const section of sections) {
+        if (roleFilter && section.role !== roleFilter) {
+          continue;
+        }
+        count++;
+        if (count === index) {
+          return {
+            sectionId: section.id,
+            reason: 'index',
+            confidence: 0.9,
+            debugInfo: `matched index ${index} with role=${roleFilter || 'any'}`,
+          };
+        }
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 按精确标题匹配
+ * 
+ * 优先匹配更长的标题，避免短标题误匹配
+ */
+function resolveByExactTitle(
+  text: string,
+  sections: import('../document/structure').DocSectionSkeleton[]
+): SectionResolutionResult | null {
+  // 按标题长度降序排序，优先匹配长标题
+  const sortedSections = [...sections].sort(
+    (a, b) => b.title.length - a.title.length
+  );
+  
+  for (const section of sortedSections) {
+    const normalizedTitle = section.title.toLowerCase().trim();
+    // 只有当标题足够长（>= 3 字符）时才尝试子串匹配
+    if (normalizedTitle === text) {
+      return {
+        sectionId: section.id,
+        reason: 'exact_title',
+        confidence: 1.0,
+        debugInfo: `exact match: "${section.title}"`,
+      };
+    }
+    // 子串匹配要求标题长度 >= 4 且用户文本包含完整标题
+    if (normalizedTitle.length >= 4 && text.includes(normalizedTitle)) {
+      return {
+        sectionId: section.id,
+        reason: 'exact_title',
+        confidence: 0.95,
+        debugInfo: `substring match: "${section.title}"`,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * 按关键字匹配（概述、结论等常见章节）
+ */
+function resolveByKeyword(
+  text: string,
+  sections: import('../document/structure').DocSectionSkeleton[]
+): SectionResolutionResult | null {
+  const keywordMappings: Array<{ patterns: RegExp[]; titleKeywords: string[] }> = [
+    {
+      patterns: [/概述|概要|简介|导言|overview|introduction|intro/i],
+      titleKeywords: ['概述', '概要', '简介', '导言', 'overview', 'introduction', 'intro'],
+    },
+    {
+      patterns: [/结论|结语|总结|小结|conclusion|summary/i],
+      titleKeywords: ['结论', '结语', '总结', '小结', 'conclusion', 'summary'],
+    },
+    {
+      patterns: [/背景|background/i],
+      titleKeywords: ['背景', 'background'],
+    },
+    {
+      patterns: [/方法|method/i],
+      titleKeywords: ['方法', 'method', 'methods'],
+    },
+    {
+      patterns: [/步骤|step/i],
+      titleKeywords: ['步骤', 'step', 'steps'],
+    },
+    {
+      patterns: [/附录|appendix/i],
+      titleKeywords: ['附录', 'appendix'],
+    },
+  ];
+  
+  for (const mapping of keywordMappings) {
+    // 检查用户输入是否包含关键字模式
+    const matchesUserText = mapping.patterns.some(p => p.test(text));
+    if (!matchesUserText) continue;
+    
+    // 查找标题包含对应关键字的章节
+    for (const section of sections) {
+      const normalizedTitle = section.title.toLowerCase();
+      const matchesTitle = mapping.titleKeywords.some(kw => 
+        normalizedTitle.includes(kw.toLowerCase())
+      );
+      if (matchesTitle) {
+        return {
+          sectionId: section.id,
+          reason: 'keyword',
+          confidence: 0.8,
+          debugInfo: `keyword match: "${section.title}"`,
+        };
+      }
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 按模糊标题匹配
+ */
+function resolveByFuzzyTitle(
+  text: string,
+  sections: import('../document/structure').DocSectionSkeleton[]
+): SectionResolutionResult | null {
+  // 提取用户文本中可能的标题引用
+  // 匹配引号内容："PRD vs MRD"、「概述」、『背景』
+  const quotedPatterns = [
+    /"([^"]+)"/,
+    /「([^」]+)」/,
+    /『([^』]+)』/,
+    /'([^']+)'/,
+    /《([^》]+)》/,
+  ];
+  
+  for (const pattern of quotedPatterns) {
+    const match = text.match(pattern);
+    if (match) {
+      const quoted = match[1].toLowerCase().trim();
+      for (const section of sections) {
+        const normalizedTitle = section.title.toLowerCase().trim();
+        if (normalizedTitle.includes(quoted) || quoted.includes(normalizedTitle)) {
+          return {
+            sectionId: section.id,
+            reason: 'partial_title',
+            confidence: 0.7,
+            debugInfo: `quoted match: "${section.title}"`,
+          };
+        }
+      }
+    }
+  }
+  
+  // 尝试直接子串匹配
+  for (const section of sections) {
+    const normalizedTitle = section.title.toLowerCase().trim();
+    // 至少匹配 3 个字符的子串
+    if (normalizedTitle.length >= 3 && text.includes(normalizedTitle)) {
+      return {
+        sectionId: section.id,
+        reason: 'partial_title',
+        confidence: 0.6,
+        debugInfo: `substring match: "${section.title}"`,
+      };
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * 按相对引用匹配：上一章、下一节
+ */
+function resolveByRelative(
+  text: string,
+  sections: import('../document/structure').DocSectionSkeleton[],
+  lastSectionId: string
+): SectionResolutionResult | null {
+  // 找到 lastSectionId 的索引
+  const currentIndex = sections.findIndex(s => s.id === lastSectionId);
+  if (currentIndex === -1) return null;
+  
+  // 匹配 "上一章/节"
+  if (/(上一|前一)(章|节|部分)/.test(text)) {
+    if (currentIndex > 0) {
+      return {
+        sectionId: sections[currentIndex - 1].id,
+        reason: 'index',
+        confidence: 0.85,
+        debugInfo: `relative: previous of ${lastSectionId}`,
+      };
+    }
+  }
+  
+  // 匹配 "下一章/节"
+  if (/(下一|后一)(章|节|部分)/.test(text)) {
+    if (currentIndex < sections.length - 1) {
+      return {
+        sectionId: sections[currentIndex + 1].id,
+        reason: 'index',
+        confidence: 0.85,
+        debugInfo: `relative: next of ${lastSectionId}`,
+      };
+    }
+  }
+  
+  // 匹配 "最后一章/节"
+  if (/(最后一|最后)(章|节)/.test(text)) {
+    return {
+      sectionId: sections[sections.length - 1].id,
+      reason: 'index',
+      confidence: 0.85,
+      debugInfo: 'relative: last section',
+    };
+  }
+  
+  return null;
 }
 
 /**
@@ -699,12 +1078,24 @@ export class CopilotRuntime {
    * 
    * 流程：
    * 1. 读取当前 SessionState
-   * 2. 构建 DocContextEnvelope
+   * 2. 构建 DocContextEnvelope（v1.2: 自动决定 full/chunked 模式）
    * 3. 可选：获取 BehaviorSummary
    * 4. 构建 System Prompt + User Message
+   *    - scope='document' + mode='full': 提供完整文档文本
+   *    - scope='document' + mode='chunked': 只提供结构和预览
+   *    - scope='section': 提供当前章节内容
    * 5. 调用 LLM
    * 6. 解析 Intent
-   * 7. mode=edit → 执行编辑；mode=chat → 只返回回复
+   * 7. 根据 Intent 执行操作：
+   *    - mode=edit → 执行编辑（始终使用结构化上下文，即使是 Full-Doc 模式）
+   *    - mode=chat → 只返回回复
+   * 
+   * 【v1.2 Full-Doc 模式】
+   * 当 scope='document' 且文档 token 数 < FULL_DOC_TOKEN_THRESHOLD 时：
+   * - envelope.mode = 'full'
+   * - envelope.documentFullText 包含完整文档
+   * - 适合"看完整篇再说"的问题（章节统计、全文总结、标题建议等）
+   * - 编辑类操作仍使用结构化 Section AI 路径，不受 Full-Doc 模式影响
    * 
    * @param userText - 用户输入
    * @returns CopilotTurnResult
@@ -786,6 +1177,10 @@ export class CopilotRuntime {
             scope: envelope.scope,
             title: envelope.global.title,
             focusSection: envelope.focus.sectionTitle,
+            // v1.2 新增：Full-Doc 模式信息
+            mode: envelope.mode,
+            documentTokenEstimate: envelope.documentTokenEstimate,
+            hasFullText: !!envelope.documentFullText,
           });
         }
       } catch (envelopeError) {
@@ -802,7 +1197,62 @@ export class CopilotRuntime {
         };
       }
       
-      // 3. 获取行为摘要
+      // 3. 🆕 structure-stats-sot v1.5: 结构查询短路
+      // 对于"有几章/多少字"类问题，直接使用 structure/stats，不走 LLM
+      const structuralResolution = resolveStructuralQuery(userText, envelope);
+      
+      if (isStructuralQuery(structuralResolution)) {
+        if (__DEV__) {
+          console.log('[CopilotRuntime] 结构查询检测:', {
+            kind: structuralResolution.kind,
+            confidence: structuralResolution.confidence,
+            hasDirectAnswer: !!structuralResolution.directAnswer,
+          });
+        }
+        
+        // 如果可以直接回答，不走 LLM
+        if (canDirectAnswer(structuralResolution)) {
+          if (__DEV__) {
+            console.log('[CopilotRuntime] 短路回答（不走 LLM）:', structuralResolution.directAnswer);
+          }
+          
+          debugSnapshot.shortCircuit = {
+            type: 'structural_query',
+            kind: structuralResolution.kind,
+            answer: structuralResolution.directAnswer,
+          };
+          this.saveDebugSnapshot(debugSnapshot);
+          
+          return {
+            replyText: structuralResolution.directAnswer!,
+            executed: false,
+            intentStatus: 'ok',
+            // 这是结构查询的直接回答，不是 edit intent
+          };
+        }
+        
+        // 如果需要澄清，返回澄清问题
+        if (needsClarification(structuralResolution)) {
+          if (__DEV__) {
+            console.log('[CopilotRuntime] 需要澄清:', structuralResolution.clarificationQuestion);
+          }
+          
+          debugSnapshot.shortCircuit = {
+            type: 'clarification_needed',
+            kind: structuralResolution.kind,
+            question: structuralResolution.clarificationQuestion,
+          };
+          this.saveDebugSnapshot(debugSnapshot);
+          
+          return {
+            replyText: structuralResolution.clarificationQuestion!,
+            executed: false,
+            intentStatus: 'ok',
+          };
+        }
+      }
+      
+      // 4. 获取行为摘要
       let behaviorSummary: BehaviorSummary | undefined;
       try {
         behaviorSummary = buildRecentBehaviorSummary({
@@ -823,7 +1273,7 @@ export class CopilotRuntime {
         // 行为摘要失败不阻止流程
       }
       
-      // 4. 构建 Prompt
+      // 5. 构建 Prompt
       const systemPrompt = buildCopilotSystemPrompt(this.state, envelope, behaviorSummary);
       const userPrompt = this.buildUserPrompt(userText, envelope);
       
@@ -1054,6 +1504,8 @@ export class CopilotRuntime {
   
   /**
    * 构建用户消息
+   * 
+   * v1.2: 根据 scope 和 mode 构建不同的用户消息
    */
   private buildUserPrompt(userText: string, envelope: DocContextEnvelope): string {
     const parts: string[] = [`用户指令：${userText}`];
@@ -1061,6 +1513,13 @@ export class CopilotRuntime {
     // 如果是 section scope，提供章节内容
     if (envelope.scope === 'section' && envelope.focus.text) {
       parts.push(`\n当前章节内容：\n${envelope.focus.text}`);
+    }
+    
+    // v1.2: document scope + full 模式时，提示 LLM 全文已在 system prompt 中
+    if (envelope.scope === 'document' && envelope.mode === 'full') {
+      parts.push(`\n（你已在 system prompt 中获得了完整的文档内容，请基于全文回答上述问题）`);
+    } else if (envelope.scope === 'document' && envelope.mode === 'chunked') {
+      parts.push(`\n（你只看到了文档的结构预览和部分段落，回答章节统计时请依赖大纲信息）`);
     }
     
     return parts.join('\n');

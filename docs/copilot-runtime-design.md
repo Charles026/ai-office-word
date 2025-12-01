@@ -1,6 +1,6 @@
 # Copilot Runtime 设计文档
 
-> 版本：v1.1  
+> 版本：v1.5  
 > 日期：2025-11-30  
 > 作者：AI Office Team
 
@@ -522,7 +522,367 @@ const followUpPatterns = [
 
 ---
 
-## 10. 文件清单
+## 10. 文档上下文构建策略：Always Structure, Sometimes Full Text (v1.4)
+
+### 10.1 核心原则
+
+**任何 Copilot 调用都遵循以下策略**：
+
+1. **始终运行 DocStructureEngine**：构建 `DocSkeleton`
+2. **始终附带 skeleton**：在 `DocContextEnvelope` 中
+3. **文档小就给全文**：`documentFullText` + skeleton
+4. **文档大只给结构**：skeleton + 章节预览
+
+### 10.2 skeleton 是结构的权威来源
+
+```
+用户问："这篇文档有几章？"
+
+✅ 正确：基于 skeleton.meta.chapterCount 回答
+❌ 错误：自己数大纲条目
+```
+
+### 10.3 自然语言章节引用
+
+使用 `resolveSectionByUserText` 从用户输入解析章节引用：
+
+| 用户说 | 解析方式 | 返回 |
+|--------|----------|------|
+| 第一章 | 索引匹配 | { sectionId: 'sec-1', reason: 'index' } |
+| overview | 标题匹配 | { sectionId: 'sec-2', reason: 'exact_title' } |
+| 概述部分 | 关键字匹配 | { sectionId: 'sec-1', reason: 'keyword' } |
+| 上一章 | 相对引用 | { sectionId: 'sec-N-1', reason: 'index' } |
+
+### 10.4 Prompt 中的展示
+
+```
+# 当前文档上下文
+
+**📊 文档结构统计（skeleton.meta）**：
+- 章数（chapter）：5
+- 节数（section + subsection）：12
+- 有概述/绪论：是
+- 有结论/总结：是
+
+**📑 文档结构（skeleton）**：
+- [sec-1] (章) 第1章 Overview
+- [sec-2] (章) 第2章 PRD vs MRD
+...
+
+**重要**：skeleton 是文档结构的唯一权威描述。
+当用户问"有几章"时，必须基于 skeleton.meta 回答。
+```
+
+---
+
+## 11. Full-Doc vs Chunked 模式 (v1.3)
+
+### 10.1 背景
+
+之前 CopilotRuntime 对 document 级别的查询只提供章节预览（snippets），无法让 LLM 看到完整文档内容。
+这导致用户提问"文档有几个章节""帮我总结全文"时，LLM 只能依赖不完整的信息。
+
+v1.3 引入 **Full-Doc vs Chunked 模式**，根据文档大小动态决定发送策略。
+
+### 10.2 模式判定逻辑
+
+```typescript
+const FULL_DOC_TOKEN_THRESHOLD = 8000; // 约 32000 字符
+
+function determineDocMode(documentTokens: number): DocScopeMode {
+  return documentTokens < FULL_DOC_TOKEN_THRESHOLD ? 'full' : 'chunked';
+}
+```
+
+| 文档大小 | 模式 | LLM 收到的内容 |
+|----------|------|----------------|
+| < 8000 tokens | `full` | 完整文档文本 + 结构大纲 |
+| >= 8000 tokens | `chunked` | 结构大纲 + 各章节预览 |
+
+### 10.3 DocContextEnvelope 扩展
+
+```typescript
+interface DocContextEnvelope {
+  scope: 'document' | 'section';
+  
+  // v1.3 新增：仅 scope='document' 时使用
+  mode?: 'full' | 'chunked';           // 模式标识
+  documentFullText?: string;           // full 模式时填充
+  documentTokenEstimate?: number;      // token 估算值
+  
+  // ... 其他字段
+}
+```
+
+### 10.4 CopilotRuntime 分流逻辑
+
+```typescript
+async runTurn(userText: string): Promise<CopilotTurnResult> {
+  const envelope = await this.buildEnvelope();
+  
+  if (envelope.scope === 'document') {
+    if (envelope.mode === 'full' && envelope.documentFullText) {
+      return this.runFullDocumentTurn(userText, envelope);
+    } else {
+      return this.runChunkedDocumentTurn(userText, envelope);
+    }
+  }
+  
+  // section scope 保持原有逻辑
+  return this.runSectionTurn(userText, envelope);
+}
+```
+
+### 10.5 Prompt 构建差异
+
+**Full-Doc 模式**：
+```
+# 当前文档上下文
+
+**模式**：📖 Full-Doc（已提供完整文档内容）
+**文档 Token 估算**：约 1250 tokens
+
+**文档大纲（带章节ID）**：
+- [sec-1] Overview
+- [sec-2] PRD vs MRD
+
+---
+
+**📄 完整文档内容**：
+
+[这里是完整的文档文本...]
+
+---
+
+**Full-Doc 模式说明**：
+- 你已获得整篇文档的完整文本
+- 可以回答关于文档结构、内容细节、章节统计的问题
+- 可以进行全文总结、关键点提取、标题建议等操作
+- 若需要编辑文档，请指定具体的 sectionId
+```
+
+**Chunked 模式**：
+```
+# 当前文档上下文
+
+**模式**：📋 Chunked（仅提供结构预览）
+
+**文档大纲（带章节ID）**：
+- [sec-1] Overview
+- [sec-2] PRD vs MRD
+
+**各章节预览**：
+• [sec-1] Overview (2000 字)
+  > This is an overview...
+• [sec-2] PRD vs MRD (2000 字)
+  > PRD focuses on...
+
+**Chunked 模式说明**：
+- 你只看到了文档的结构预览和部分段落
+- 回答章节统计时请依赖大纲信息
+- 若需要查看某个章节的完整内容，请用户点击该章节
+```
+
+### 10.6 编辑操作与 Full-Doc 模式
+
+**重要**：即使在 Full-Doc 模式下，编辑类操作（`rewrite_section`, `rewrite_paragraph`）仍然走现有的 Section AI + DocOps 路径。
+
+Full-Doc 模式主要服务于 **阅读类意图**：
+- 章节统计、全文总结
+- 内容问答、关键点提取
+- 标题建议、结构分析
+
+### 10.7 Token 估算工具
+
+```typescript
+// src/copilot/utils/tokenUtils.ts
+
+export const FULL_DOC_TOKEN_THRESHOLD = 8000;
+
+/** 粗略估算：1 token ≈ 4 字符 */
+export function estimateTokensForText(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+```
+
+### 10.8 测试覆盖
+
+| 测试文件 | 场景 |
+|----------|------|
+| `tokenUtils.test.ts` | token 估算准确性 |
+| `DocContextEnvelope.documentMode.test.ts` | envelope 模式判定、字段填充 |
+| `CopilotRuntime.documentMode.test.ts` | 分流逻辑、编辑操作路径 |
+| `copilotIntentParser.documentMode.test.ts` | Prompt 构建差异 |
+
+---
+
+## 11. 结构与统计真相：Structure & Stats as Source of Truth (v1.5)
+
+> 本节描述如何确保 Copilot 对"有多少章/小节/字数/标题是什么"类问题的回答基于 **真实结构与统计数据**，而不是 LLM 自由发挥。
+
+### 11.1 设计目标
+
+1. **结构真相**：章节数量、层级、标题等必须来自 `DocStructureEngine`
+2. **统计真相**：字数、字符数、Token 数必须来自 runtime 计算
+3. **标题分离**：文档标题 vs 章节标题在协议层明确区分
+4. **禁止幻觉**：LLM 不得自行估算或发明数字
+
+### 11.2 DocContextEnvelope 增强
+
+```typescript
+interface DocContextEnvelope {
+  global: {
+    // 已有字段
+    outline: OutlineEntry[];
+    sectionsPreview: SectionPreview[];
+    
+    // 🆕 v1.5 结构真相
+    structure?: {
+      chapters: ChapterInfo[];
+    };
+    
+    // 🆕 v1.5 统计真相
+    stats?: {
+      wordCount?: number;
+      charCount?: number;
+      tokenEstimate?: number;
+    };
+    
+    // 🆕 v1.5 文档元信息
+    meta?: {
+      title?: string;
+    };
+  };
+}
+
+interface ChapterInfo {
+  id: string;           // sectionId
+  level: 1 | 2 | 3;
+  titleText: string;
+  startBlockIndex: number;
+  endBlockIndex: number;
+  childCount: number;
+}
+```
+
+### 11.3 数据来源链路
+
+```
+DocumentAst / LexicalEditor
+        ↓
+DocStructureEngine.buildDocSkeletonFromEditor()
+        ↓
+DocSkeleton / DocStructureSnapshot
+        ↓
+buildDocContextEnvelope()
+        ↓
+DocContextEnvelope
+  ├─ global.structure.chapters[] ← 从 skeleton.sections 映射
+  ├─ global.stats.wordCount      ← countWords(fullText)
+  ├─ global.stats.charCount      ← fullText.length
+  ├─ global.stats.tokenEstimate  ← estimateTokensForText(fullText)
+  └─ global.meta.title           ← skeleton.meta.title 或 filename
+```
+
+### 11.4 结构查询解析器 (`structuralQueryResolver.ts`)
+
+**职责**：
+- 从用户自然语言中识别结构查询意图
+- 将中文问法映射到结构术语（章/节/段）
+- 提供置信度评估，低置信度时返回澄清问题
+
+**支持的查询类型**：
+
+| Kind | 示例问法 | 回答来源 |
+|------|----------|----------|
+| `chapter_count` | "有几章" / "共多少部分" | `structure.chapters.length` |
+| `section_count` | "有几节" / "多少小节" | `structure.chapters` 子节点统计 |
+| `paragraph_count` | "有几段" | `stats.paragraphCount` (如有) |
+| `word_count` | "多少字" | `stats.wordCount` |
+| `char_count` | "多少字符" | `stats.charCount` |
+| `token_count` | "多少 token" | `stats.tokenEstimate` |
+| `title_query` | "文章标题是什么" | `meta.title` |
+| `locate_chapter` | "第一章在哪" | `structure.chapters[0]` |
+| `locate_section` | "第二节在哪" | 遍历 `structure.chapters` |
+
+**编辑意图过滤**：
+
+当用户文本包含编辑关键词（如"重写""改写""帮我"）时，解析器返回 `kind: 'other'`，让 LLM 处理为编辑意图：
+
+```typescript
+const EDIT_INTENT_KEYWORDS = ['重写', '改写', '修改', '帮我', ...];
+
+if (hasEditIntent) {
+  return { kind: 'other', debugInfo: 'skipped - contains edit intent keyword' };
+}
+```
+
+### 11.5 CopilotRuntime 短路逻辑
+
+在 `runTurn` 中，对于可以直接回答的结构查询，跳过 LLM：
+
+```typescript
+const structuralResolution = resolveStructuralQuery(userText, envelope);
+
+if (isStructuralQuery(structuralResolution)) {
+  // 可以直接回答：使用 structure/stats 生成回复
+  if (canDirectAnswer(structuralResolution)) {
+    return {
+      replyText: structuralResolution.directAnswer!,
+      executed: false,
+      intentStatus: 'ok',
+    };
+  }
+  
+  // 需要澄清：返回澄清问题
+  if (needsClarification(structuralResolution)) {
+    return {
+      replyText: structuralResolution.clarificationQuestion!,
+      executed: false,
+      intentStatus: 'ok',
+    };
+  }
+}
+
+// 否则继续走 LLM 路径
+```
+
+### 11.6 System Prompt 硬约束
+
+在 Copilot 的 System Prompt 中添加强约束：
+
+```
+## 结构与统计规则
+
+1. **禁止数字估算**：你不能凭感觉估计「字数」「token 数」「章节数量」。
+   - 如果 `global.stats` 或 `global.structure` 中有对应字段，使用它
+   - 如果没有精确数字，只能用模糊表达或说明「系统没有统计到精确数字」
+   - 禁止输出诸如"约 2 万字""大约 5,399 tokens"这类看似精确的估计
+
+2. **标题区分**：
+   - 「文档标题」= `global.meta.title`
+   - 「Overview / PRD vs MRD」等是章节标题，不是文档标题
+   - 回答"文章标题是什么"时：
+     * 有 `meta.title` → 只复述这个值
+     * 无 `meta.title` → 说「当前文档没有单独标注的文档标题」
+
+3. **结构来源**：
+   - 章节数量必须来自 `global.structure.chapters`
+   - 不要自己分析文档内容推断章节数
+```
+
+### 11.7 测试覆盖
+
+| 测试文件 | 场景 |
+|----------|------|
+| `structuralQueryResolver.test.ts` | 中文问法解析、编辑意图过滤、置信度判定 |
+| `CopilotRuntime.followup.test.ts` | 编辑请求不被短路 |
+| `docContextEngine.test.ts` | structure/stats 字段填充 |
+
+---
+
+## 12. 文件清单
 
 ### 新增文件
 
@@ -538,6 +898,13 @@ const followUpPatterns = [
 | `src/copilot/__tests__/CopilotRuntime.paragraph.test.ts` | 段落操作测试 (v1.1) |
 | `src/copilot/__tests__/CopilotRuntime.reference.test.ts` | 自然语言引用解析测试 (v1.1) |
 | `src/copilot/__tests__/CopilotRuntime.followup.test.ts` | 连续提问测试 (v1.2) |
+| `src/copilot/utils/tokenUtils.ts` | Token 估算工具 + 阈值常量 (v1.3) |
+| `src/copilot/__tests__/copilotIntentParser.documentMode.test.ts` | Prompt Document Mode 测试 (v1.3) |
+| `src/copilot/__tests__/CopilotRuntime.documentMode.test.ts` | Document Mode 分流测试 (v1.3) |
+| `src/copilot/utils/__tests__/tokenUtils.test.ts` | Token 估算测试 (v1.3) |
+| `src/docContext/__tests__/DocContextEnvelope.documentMode.test.ts` | Envelope 模式测试 (v1.3) |
+| `src/copilot/structuralQueryResolver.ts` | 结构查询解析器 (v1.5) |
+| `src/copilot/__tests__/structuralQueryResolver.test.ts` | 结构查询解析测试 (v1.5) |
 
 ### 修改文件
 
@@ -552,4 +919,8 @@ const followUpPatterns = [
 | `src/editor/contextMenus/HeadingContextMenu.tsx` | 支持 H1 右键菜单 (v1.2) |
 | `src/runtime/context/__tests__/extractSectionContext.test.ts` | H1 测试用例 (v1.2) |
 | `src/runtime/intents/__tests__/buildSectionIntent.test.ts` | H1/非法 level 测试 (v1.2) |
+| `src/docContext/docContextTypes.ts` | 添加 DocScopeMode、documentFullText、documentTokenEstimate、structure、stats、meta 字段 (v1.3, v1.5) |
+| `src/docContext/docContextEngine.ts` | 实现 Full-Doc 模式 envelope 构建，填充 structure/stats/meta (v1.3, v1.5) |
+| `src/copilot/copilotIntentParser.ts` | 添加结构与统计硬约束到 System Prompt (v1.5) |
+| `src/copilot/CopilotRuntime.ts` | 添加结构查询短路逻辑 (v1.5) |
 

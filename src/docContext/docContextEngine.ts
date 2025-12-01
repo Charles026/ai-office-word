@@ -14,20 +14,36 @@
  * - v1：只支持 scope='section'，不做复杂压缩
  */
 
-import { LexicalEditor } from 'lexical';
+import { LexicalEditor, $getRoot } from 'lexical';
 import {
   BuildContextOptions,
   DocContextEnvelope,
   DocContextError,
+  DocScopeMode,
   OutlineEntry,
   FocusContext,
   NeighborhoodContext,
   GlobalContext,
   SectionPreview,
+  DocStructure,
+  DocStats,
+  DocMeta,
+  ChapterInfo,
 } from './docContextTypes';
 import { extractSectionContext, getSectionFullText } from '../runtime/context';
 import { generateOutlineFromEditor } from '../outline/outlineUtils';
+import {
+  estimateTokensForText,
+  estimateTokensForCharCount,
+  FULL_DOC_TOKEN_THRESHOLD,
+} from '../copilot/utils/tokenUtils';
 import type { OutlineItem } from '../outline/types';
+import {
+  buildDocSkeletonFromEditor,
+  flattenDocSkeleton,
+  type DocSkeleton,
+  type DocSectionSkeleton,
+} from '../document/structure';
 
 // ==========================================
 // 常量
@@ -43,13 +59,6 @@ const __DEV__ = typeof process !== 'undefined' && process.env.NODE_ENV === 'deve
 // ==========================================
 // 辅助函数
 // ==========================================
-
-/**
- * 估算 token 数（简化版：字符数 / 3）
- */
-function estimateTokens(charCount: number): number {
-  return Math.ceil(charCount / 3);
-}
 
 /**
  * 将 OutlineItem 转换为 OutlineEntry
@@ -140,30 +149,85 @@ export async function buildDocContextEnvelope(
  * - 完整大纲
  * - 每个章节的预览（标题 + 前 N 字符）
  * - 总字符数和 token 估算
+ * 
+ * v1.2 新增：
+ * - Full-Doc 模式：当文档足够小时，提供完整文档文本
+ * - mode 字段：'full' | 'chunked'
+ * - documentFullText 字段：Full 模式下的完整文本
+ * 
+ * v1.3 新增：
+ * - skeleton: 始终从 DocStructureEngine 生成的结构化骨架
  */
 async function buildDocumentScopeEnvelope(
   docId: string,
   editor: LexicalEditor,
   maxTokens: number
 ): Promise<DocContextEnvelope> {
+  // 🆕 v1.3: 首先构建 DocSkeleton（这是结构的权威来源）
+  let skeleton: DocSkeleton | undefined;
+  try {
+    skeleton = buildDocSkeletonFromEditor(editor);
+    if (__DEV__) {
+      console.debug('[DocContextEngine] DocSkeleton built:', {
+        chapterCount: skeleton.meta.chapterCount,
+        sectionCount: skeleton.meta.sectionCount,
+        languageHint: skeleton.meta.languageHint,
+      });
+    }
+  } catch (err) {
+    if (__DEV__) {
+      console.warn('[DocContextEngine] Failed to build skeleton:', err);
+    }
+    // skeleton 保持 undefined，后续逻辑会 fallback 到旧方式
+  }
+
   // 1. 获取大纲
-  const outlineItems = generateOutlineFromEditor(editor);
-  const outline: OutlineEntry[] = outlineItems.map(convertOutlineItem);
+  // 🆕 v1.3: 优先从 skeleton 生成大纲，fallback 到旧方式
+  let outline: OutlineEntry[];
+  if (skeleton) {
+    outline = buildOutlineFromSkeleton(skeleton);
+  } else {
+    const outlineItems = generateOutlineFromEditor(editor);
+    outline = outlineItems.map(convertOutlineItem);
+  }
 
   if (__DEV__) {
-    console.debug('[DocContextEngine] Document scope - outline items:', outlineItems.length);
+    console.debug('[DocContextEngine] Document scope - outline items:', outline.length);
   }
 
   // 2. 推断文档标题
-  const docTitle = inferDocTitleFromOutline(outlineItems);
+  // 🆕 v1.3: 优先从 skeleton 获取标题
+  let docTitle: string | null = null;
+  if (skeleton && skeleton.sections.length > 0) {
+    docTitle = skeleton.sections[0].title;
+  } else {
+    const outlineItems = generateOutlineFromEditor(editor);
+    docTitle = inferDocTitleFromOutline(outlineItems);
+  }
 
-  // 3. 构建各章节预览
+  // 3. 构建各章节预览 + 收集完整文本
+  // 🆕 v1.3: 基于 skeleton 的章节列表
   const sectionsPreview: SectionPreview[] = [];
+  const fullTextParts: string[] = [];
   let totalCharCount = 0;
 
-  for (const item of outlineItems) {
+  const sectionList = skeleton
+    ? flattenDocSkeleton(skeleton)
+    : generateOutlineFromEditor(editor).map(item => ({
+        id: item.id,
+        title: item.text,
+        level: item.level as 1 | 2 | 3,
+      }));
+
+  for (const section of sectionList) {
+    const sectionId = 'titleBlockId' in section
+      ? (section as DocSectionSkeleton).id
+      : section.id;
+    const title = section.title;
+    const level = section.level;
+
     try {
-      const sectionContext = extractSectionContext(editor, item.id);
+      const sectionContext = extractSectionContext(editor, sectionId);
       let sectionText = '';
       
       if (sectionContext) {
@@ -173,35 +237,56 @@ async function buildDocumentScopeEnvelope(
       const charCount = sectionText.length;
       totalCharCount += charCount;
       
+      // 收集完整文本（用于 Full-Doc 模式）
+      if (sectionText) {
+        fullTextParts.push(sectionText);
+      }
+      
       // 截取预览片段
       const snippet = sectionText.slice(0, SECTION_SNIPPET_LENGTH).trim();
       const hasMore = sectionText.length > SECTION_SNIPPET_LENGTH;
       
       sectionsPreview.push({
-        sectionId: item.id,
-        title: item.text,
-        level: item.level,
+        sectionId,
+        title,
+        level,
         snippet: hasMore ? snippet + '...' : snippet,
         charCount,
       });
     } catch (err) {
       if (__DEV__) {
-        console.warn('[DocContextEngine] Failed to extract section:', item.id, err);
+        console.warn('[DocContextEngine] Failed to extract section:', sectionId, err);
       }
       // 即使提取失败，也添加一个空预览
       sectionsPreview.push({
-        sectionId: item.id,
-        title: item.text,
-        level: item.level,
+        sectionId,
+        title,
+        level,
         snippet: '(内容提取失败)',
         charCount: 0,
       });
     }
   }
 
-  const approxTotalTokenCount = estimateTokens(totalCharCount);
+  // 4. 🆕 构建完整文档文本并决定模式
+  const documentFullText = fullTextParts.join('\n\n');
+  const documentTokenEstimate = estimateTokensForText(documentFullText);
+  
+  // 决定模式：token 数 < 阈值时使用 full 模式
+  const mode: DocScopeMode = documentTokenEstimate < FULL_DOC_TOKEN_THRESHOLD
+    ? 'full'
+    : 'chunked';
 
-  // 4. 构建 Focus（document scope 时为空焦点）
+  if (__DEV__) {
+    console.debug('[DocContextEngine] Full-Doc mode decision:', {
+      documentTokenEstimate,
+      threshold: FULL_DOC_TOKEN_THRESHOLD,
+      mode,
+      fullTextLength: documentFullText.length,
+    });
+  }
+
+  // 5. 构建 Focus（document scope 时为空焦点）
   const focus: FocusContext = {
     sectionId: null,
     sectionTitle: null,
@@ -210,19 +295,31 @@ async function buildDocumentScopeEnvelope(
     approxTokenCount: 0,
   };
 
-  // 5. 构建 Neighborhood（document scope 时不适用）
+  // 6. 构建 Neighborhood（document scope 时不适用）
   const neighborhood: NeighborhoodContext = {};
 
-  // 6. 构建 Global
+  // 7. 🆕 structure-stats-sot v1.5: 构建 structure / stats / docMeta
+  const { structure, stats, docMeta } = buildStructureStatsAndMeta(
+    skeleton,
+    documentFullText,
+    documentTokenEstimate,
+    sectionsPreview.reduce((sum, s) => sum + s.charCount, 0)
+  );
+
+  // 8. 构建 Global
   const global: GlobalContext = {
     title: docTitle,
     outline,
     totalCharCount,
-    approxTotalTokenCount,
+    approxTotalTokenCount: documentTokenEstimate,
     sectionsPreview,
+    // 🆕 structure-stats-sot v1.5
+    structure,
+    stats,
+    docMeta,
   };
 
-  // 7. 组装 Envelope
+  // 9. 组装 Envelope
   const envelope: DocContextEnvelope = {
     docId,
     scope: 'document',
@@ -231,12 +328,18 @@ async function buildDocumentScopeEnvelope(
     global,
     budget: {
       maxTokens,
-      estimatedTokens: approxTotalTokenCount,
+      estimatedTokens: documentTokenEstimate,
     },
     meta: {
       generatedAt: Date.now(),
       generatorVersion: GENERATOR_VERSION,
     },
+    // 🆕 v1.2 新增字段
+    mode,
+    documentFullText: mode === 'full' ? documentFullText : undefined,
+    documentTokenEstimate,
+    // 🆕 v1.3 新增字段：始终附带 skeleton
+    skeleton,
   };
 
   if (__DEV__) {
@@ -245,7 +348,10 @@ async function buildDocumentScopeEnvelope(
       title: docTitle,
       sectionCount: sectionsPreview.length,
       totalCharCount,
-      approxTotalTokenCount,
+      documentTokenEstimate,
+      mode,
+      hasFullText: mode === 'full',
+      hasSkeleton: !!skeleton,
     });
   }
 
@@ -253,7 +359,180 @@ async function buildDocumentScopeEnvelope(
 }
 
 /**
- * 构建 section scope 的信封（原有逻辑）
+ * 从 DocSkeleton 构建 OutlineEntry 列表
+ */
+function buildOutlineFromSkeleton(skeleton: DocSkeleton): OutlineEntry[] {
+  const outline: OutlineEntry[] = [];
+  
+  function traverse(section: DocSectionSkeleton) {
+    outline.push({
+      sectionId: section.id,
+      title: section.title,
+      level: section.level,
+    });
+    for (const child of section.children) {
+      traverse(child);
+    }
+  }
+  
+  for (const section of skeleton.sections) {
+    traverse(section);
+  }
+  
+  return outline;
+}
+
+// ==========================================
+// structure-stats-sot v1.5: 结构与统计真相构建
+// ==========================================
+
+/**
+ * 从 DocSkeleton 构建 structure / stats / docMeta
+ * 
+ * 这是所有结构和统计问题的唯一数据来源。
+ * LLM 禁止自行推断这些信息。
+ * 
+ * @tag structure-stats-sot
+ */
+function buildStructureStatsAndMeta(
+  skeleton: DocSkeleton | undefined,
+  documentFullText: string,
+  documentTokenEstimate: number,
+  totalCharCount: number
+): {
+  structure: DocStructure | undefined;
+  stats: DocStats;
+  docMeta: DocMeta;
+} {
+  // 1. 构建 stats（始终可用）
+  const stats: DocStats = {
+    charCount: totalCharCount,
+    wordCount: estimateWordCount(documentFullText),
+    tokenEstimate: documentTokenEstimate,
+    paragraphCount: countParagraphs(documentFullText),
+  };
+  
+  // 2. 如果没有 skeleton，返回最小信息
+  if (!skeleton) {
+    return {
+      structure: undefined,
+      stats,
+      docMeta: {
+        title: null,
+        hasExplicitTitle: false,
+      },
+    };
+  }
+  
+  // 3. 构建 structure
+  const flatSections = flattenDocSkeleton(skeleton);
+  const chapters: ChapterInfo[] = [];
+  const allSections: ChapterInfo[] = [];
+  
+  for (const section of flatSections) {
+    const info: ChapterInfo = {
+      id: section.id,
+      level: section.level,
+      titleText: section.title,
+      startIndex: section.startBlockIndex,
+      endIndex: section.endBlockIndex,
+      childCount: section.children.length,
+      paragraphCount: section.paragraphCount,
+      role: section.role,
+    };
+    
+    allSections.push(info);
+    
+    // 只有 role=chapter 或 level=1 的才算"章"
+    if (section.role === 'chapter' || section.level === 1) {
+      chapters.push(info);
+    }
+  }
+  
+  const structure: DocStructure = {
+    chapters,
+    allSections,
+    chapterCount: chapters.length,
+    totalSectionCount: allSections.length,
+  };
+  
+  // 4. 构建 docMeta
+  // 优先级：文件名 > docTitle（如果有特殊标记）> 第一个 H1
+  let docTitle: string | null = null;
+  let hasExplicitTitle = false;
+  
+  // 检查是否有 doc_title 角色的段落
+  // 目前简化为使用第一个 chapter 的标题
+  if (skeleton.sections.length > 0) {
+    docTitle = skeleton.sections[0].title;
+    // 如果顶层只有一个 section 且它是 chapter，可能是文档标题
+    hasExplicitTitle = skeleton.sections.length === 1 && 
+                        skeleton.sections[0].role === 'chapter';
+  }
+  
+  const docMeta: DocMeta = {
+    title: docTitle,
+    hasExplicitTitle,
+  };
+  
+  if (__DEV__) {
+    console.debug('[DocContextEngine] structure-stats-sot built:', {
+      chapterCount: structure.chapterCount,
+      totalSectionCount: structure.totalSectionCount,
+      charCount: stats.charCount,
+      wordCount: stats.wordCount,
+      docTitle: docMeta.title,
+      hasExplicitTitle: docMeta.hasExplicitTitle,
+    });
+  }
+  
+  return { structure, stats, docMeta };
+}
+
+/**
+ * 估算字数
+ * 
+ * 规则：
+ * - 中文：每个汉字算 1 个字
+ * - 英文：按空格分词，每个词算 1 个字
+ * 
+ * @tag structure-stats-sot
+ */
+function estimateWordCount(text: string): number {
+  if (!text) return 0;
+  
+  // 统计中文字符数
+  const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  
+  // 统计英文词数（按空格分词）
+  const englishWords = text
+    .replace(/[\u4e00-\u9fa5]/g, ' ') // 移除中文
+    .split(/\s+/)
+    .filter(w => w.length > 0 && /[a-zA-Z]/.test(w))
+    .length;
+  
+  return chineseChars + englishWords;
+}
+
+/**
+ * 统计段落数
+ * 
+ * 简单规则：按连续两个换行分隔
+ * 
+ * @tag structure-stats-sot
+ */
+function countParagraphs(text: string): number {
+  if (!text) return 0;
+  
+  // 按双换行分隔，过滤空段落
+  const paragraphs = text.split(/\n\n+/).filter(p => p.trim().length > 0);
+  return paragraphs.length;
+}
+
+/**
+ * 构建 section scope 的信封
+ * 
+ * v1.3 更新：也附带 skeleton
  */
 async function buildSectionScopeEnvelope(
   docId: string,
@@ -265,15 +544,31 @@ async function buildSectionScopeEnvelope(
     throw new DocContextError('sectionId is required when scope="section"');
   }
 
+  // 🆕 v1.3: 构建 DocSkeleton
+  let skeleton: DocSkeleton | undefined;
+  try {
+    skeleton = buildDocSkeletonFromEditor(editor);
+  } catch (err) {
+    if (__DEV__) {
+      console.warn('[DocContextEngine] Failed to build skeleton:', err);
+    }
+  }
+
   // 1. 获取大纲
-  const outlineItems = generateOutlineFromEditor(editor);
-  const outline: OutlineEntry[] = outlineItems.map(convertOutlineItem);
+  let outline: OutlineEntry[];
+  if (skeleton) {
+    outline = buildOutlineFromSkeleton(skeleton);
+  } else {
+    const outlineItems = generateOutlineFromEditor(editor);
+    outline = outlineItems.map(convertOutlineItem);
+  }
 
   if (__DEV__) {
-    console.debug('[DocContextEngine] Section scope - outline items:', outlineItems.length);
+    console.debug('[DocContextEngine] Section scope - outline items:', outline.length);
   }
 
   // 2. 获取章节标题
+  const outlineItems = generateOutlineFromEditor(editor);
   const sectionTitle = findSectionTitleFromOutline(outlineItems, sectionId);
 
   // 3. 获取章节内容
@@ -292,10 +587,15 @@ async function buildSectionScopeEnvelope(
   }
 
   const charCount = sectionText.length;
-  const approxTokenCount = estimateTokens(charCount);
+  const approxTokenCount = estimateTokensForCharCount(charCount);
 
   // 4. 推断文档标题
-  const docTitle = inferDocTitleFromOutline(outlineItems);
+  let docTitle: string | null = null;
+  if (skeleton && skeleton.sections.length > 0) {
+    docTitle = skeleton.sections[0].title;
+  } else {
+    docTitle = inferDocTitleFromOutline(outlineItems);
+  }
 
   // 5. 构建 Focus
   const focus: FocusContext = {
@@ -309,13 +609,25 @@ async function buildSectionScopeEnvelope(
   // 6. 构建 Neighborhood（v1 先占位）
   const neighborhood: NeighborhoodContext = {};
 
-  // 7. 构建 Global
+  // 7. 🆕 structure-stats-sot v1.5: 构建 structure / stats / docMeta
+  const { structure, stats, docMeta } = buildStructureStatsAndMeta(
+    skeleton,
+    sectionText,
+    approxTokenCount,
+    charCount
+  );
+
+  // 8. 构建 Global
   const global: GlobalContext = {
     title: docTitle,
     outline,
+    // 🆕 structure-stats-sot v1.5
+    structure,
+    stats,
+    docMeta,
   };
 
-  // 8. 组装 Envelope
+  // 9. 组装 Envelope
   const envelope: DocContextEnvelope = {
     docId,
     scope: 'section',
@@ -330,6 +642,8 @@ async function buildSectionScopeEnvelope(
       generatedAt: Date.now(),
       generatorVersion: GENERATOR_VERSION,
     },
+    // 🆕 v1.3: 始终附带 skeleton
+    skeleton,
   };
 
   if (__DEV__) {
@@ -339,6 +653,7 @@ async function buildSectionScopeEnvelope(
       charCount,
       approxTokenCount,
       outlineCount: outline.length,
+      hasSkeleton: !!skeleton,
     });
   }
 

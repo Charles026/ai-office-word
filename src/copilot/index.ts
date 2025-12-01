@@ -73,3 +73,15 @@ export {
   describeIntent,
 } from './copilotIntentParser';
 
+// ==========================================
+// v3.1 新增：Token 估算工具
+// ==========================================
+
+export {
+  estimateTokensForText,
+  estimateTokensForCharCount,
+  isDocumentSmallEnoughForFullMode,
+  isTextSmallEnoughForFullMode,
+  FULL_DOC_TOKEN_THRESHOLD,
+  CHARS_PER_TOKEN,
+} from './utils';

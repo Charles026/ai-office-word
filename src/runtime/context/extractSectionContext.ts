@@ -22,6 +22,11 @@
  * - 只依赖 Lexical AST，不访问 UI/Editor/DOM
  * - 单次遍历，O(n) 复杂度
  * - 不做 AI 调用或 DocOps
+ * 
+ * 【v1.2 更新】
+ * - 新增 DocStructureEngine 支持，作为结构真相的权威来源
+ * - 保留原有直接遍历逻辑作为 fallback
+ * - 可通过 extractSectionContextFromStructure 使用 DocStructureSnapshot
  */
 
 import { LexicalEditor, $getRoot, LexicalNode, $isElementNode } from 'lexical';
@@ -35,6 +40,12 @@ import {
   SectionContextError,
   ChildSectionMeta,
 } from './types';
+import {
+  buildDocStructureFromEditor,
+  findSectionById,
+  type DocStructureSnapshot,
+  type SectionNode,
+} from '../../document/structure';
 
 // ==========================================
 // 开发模式标志
@@ -438,5 +449,107 @@ export function getSectionStats(context: SectionContext): {
     charCount,
     wordCount,
   };
+}
+
+// ==========================================
+// DocStructureEngine 集成 (v1.2)
+// ==========================================
+
+/**
+ * 从编辑器获取 DocStructureSnapshot
+ * 
+ * 这是获取文档结构真相的推荐方式。
+ * 返回的 snapshot 可以用于多次查询，避免重复遍历 AST。
+ * 
+ * @param editor - Lexical 编辑器实例
+ * @returns DocStructureSnapshot
+ */
+export function getDocStructureSnapshot(editor: LexicalEditor): DocStructureSnapshot {
+  return buildDocStructureFromEditor(editor, { debug: __DEV__ });
+}
+
+/**
+ * 从 DocStructureSnapshot 中提取 SectionContext
+ * 
+ * 这是 v1.2 新增的方法，使用 DocStructureEngine 作为结构真相来源。
+ * 相比 extractSectionContext，这个方法：
+ * - 使用预构建的 DocStructureSnapshot，避免重复遍历
+ * - 依赖 DocStructureEngine 的归一化结构
+ * - 支持更复杂的结构查询
+ * 
+ * @param editor - Lexical 编辑器实例
+ * @param snapshot - 预构建的 DocStructureSnapshot
+ * @param sectionId - 目标章节 ID（block key）
+ * @returns SectionContext
+ * @throws SectionContextError
+ */
+export function extractSectionContextFromStructure(
+  editor: LexicalEditor,
+  snapshot: DocStructureSnapshot,
+  sectionId: string
+): SectionContext {
+  // 1. 从 snapshot 中查找 SectionNode
+  const sectionNode = findSectionById(snapshot, sectionId);
+  
+  if (!sectionNode) {
+    throw new SectionContextError(
+      `未找到 sectionId: ${sectionId}（在 DocStructureSnapshot 中）`,
+      sectionId,
+      'SECTION_NOT_FOUND'
+    );
+  }
+  
+  // 2. 使用原有的 extractSectionContext 获取完整的 ParagraphInfo
+  // 因为 DocStructureSnapshot 只存储 block IDs，不存储完整的段落文本
+  // 所以我们仍然需要从 Lexical 读取实际内容
+  // 
+  // TODO(doc-structure): 未来可以让 DocStructureSnapshot 存储更多信息，
+  // 完全避免对 extractSectionContext 的依赖
+  return extractSectionContext(editor, sectionId);
+}
+
+/**
+ * 使用 DocStructureEngine 验证 sectionId 是否有效
+ * 
+ * 快速检查，不需要提取完整上下文
+ * 
+ * @param snapshot - DocStructureSnapshot
+ * @param sectionId - 目标章节 ID
+ * @returns 是否存在
+ */
+export function isSectionIdValid(
+  snapshot: DocStructureSnapshot,
+  sectionId: string
+): boolean {
+  return findSectionById(snapshot, sectionId) !== null;
+}
+
+/**
+ * 获取 SectionNode 的段落角色信息
+ * 
+ * @param snapshot - DocStructureSnapshot
+ * @param sectionId - 目标章节 ID
+ * @returns 段落角色映射（只包含该 section 的 own paragraphs）
+ */
+export function getSectionParagraphRoles(
+  snapshot: DocStructureSnapshot,
+  sectionId: string
+): Record<string, string> | null {
+  const sectionNode = findSectionById(snapshot, sectionId);
+  if (!sectionNode) {
+    return null;
+  }
+  
+  const roles: Record<string, string> = {};
+  
+  // 标题
+  roles[sectionNode.titleBlockId] = 'section_title';
+  
+  // own paragraphs
+  for (const blockId of sectionNode.ownParagraphBlockIds) {
+    roles[blockId] = snapshot.paragraphRoles[blockId] || 'body';
+  }
+  
+  return roles;
 }
 

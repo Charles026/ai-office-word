@@ -22,6 +22,16 @@
 export type DocScope = 'selection' | 'section' | 'document';
 
 /**
+ * Document Scope 模式 (v1.2)
+ * 
+ * - 'full': 全文模式，documentFullText 包含完整文档内容
+ * - 'chunked': 分块模式，只提供结构预览和章节片段
+ * 
+ * 决策逻辑：当文档 token 数 < FULL_DOC_TOKEN_THRESHOLD 时使用 'full'
+ */
+export type DocScopeMode = 'full' | 'chunked';
+
+/**
  * 大纲项（精简版，用于 Envelope）
  */
 export interface OutlineEntry {
@@ -68,6 +78,103 @@ export interface SectionPreview {
 }
 
 // ==========================================
+// 结构真相类型 (structure-stats-sot v1)
+// ==========================================
+
+/**
+ * 章节信息
+ * 
+ * 与 DocStructureEngine 的 SectionNode 对齐，但更精简。
+ * 这是"有几章/第几章"类问题的唯一数据来源。
+ * 
+ * @tag structure-stats-sot
+ */
+export interface ChapterInfo {
+  /** 章节 ID（对应 DocStructureEngine 的 section.id） */
+  id: string;
+  /** 层级（1=H1/章, 2=H2/节, 3=H3/小节） */
+  level: 1 | 2 | 3;
+  /** 标题纯文本 */
+  titleText: string;
+  /** 在 blocks 中的起始索引 */
+  startIndex: number;
+  /** 在 blocks 中的结束索引（左闭右开） */
+  endIndex: number;
+  /** 子章节数量（直接子节点，不含孙子） */
+  childCount: number;
+  /** 直属段落数量（不含子章节的段落） */
+  paragraphCount: number;
+  /** 语义角色（从 DocSkeleton 获取） */
+  role?: 'chapter' | 'section' | 'subsection' | 'appendix' | 'meta';
+}
+
+/**
+ * 文档结构真相
+ * 
+ * 所有章节/节的计数和定位，都必须从这里获取。
+ * LLM 禁止自行推断结构，必须使用这些字段。
+ * 
+ * @tag structure-stats-sot
+ */
+export interface DocStructure {
+  /** 章级别（level=1 或 role=chapter）的章节列表 */
+  chapters: ChapterInfo[];
+  /** 所有章节的扁平列表（包含所有层级） */
+  allSections: ChapterInfo[];
+  /** 顶层章节数量（level=1） */
+  chapterCount: number;
+  /** 所有章节总数（含子章节） */
+  totalSectionCount: number;
+}
+
+/**
+ * 文档统计信息
+ * 
+ * 所有数字统计必须从这里获取。
+ * LLM 禁止估算或猜测任何数字。
+ * 
+ * @tag structure-stats-sot
+ */
+export interface DocStats {
+  /** 总字符数（中文 + 英文 + 标点） */
+  charCount: number;
+  /** 总字数（中文按字，英文按词粗略估算） */
+  wordCount: number;
+  /** Token 估算（使用 estimateTokensForText） */
+  tokenEstimate: number;
+  /** 段落数量 */
+  paragraphCount: number;
+}
+
+/**
+ * 文档元信息
+ * 
+ * 文档级别的标识信息，与章节标题严格区分。
+ * 
+ * @tag structure-stats-sot
+ */
+export interface DocMeta {
+  /** 
+   * 文档标题
+   * 
+   * 优先级：
+   * 1. 文件名（如果有）
+   * 2. DocStructureEngine 识别的 doc_title
+   * 3. 第一个 H1 标题
+   * 4. null（明确表示没有文档标题）
+   * 
+   * 注意：这与"章节标题"是不同的概念！
+   */
+  title: string | null;
+  /** 文档来源（如果有） */
+  source?: string;
+  /** 文件名（不含路径） */
+  fileName?: string;
+  /** 是否有显式的文档标题 */
+  hasExplicitTitle: boolean;
+}
+
+// ==========================================
 // DocContextEnvelope（核心类型）
 // ==========================================
 
@@ -110,20 +217,48 @@ export interface NeighborhoodContext {
  * Global 全局信息
  * 
  * 整个文档的概览信息
+ * 
+ * @tag structure-stats-sot v1.5: 新增 structure / stats / meta
  */
 export interface GlobalContext {
-  /** 文档标题（通常是第一个 H1 或文件名） */
+  /** 文档标题（通常是第一个 H1 或文件名）@deprecated 使用 meta.title */
   title: string | null;
   /** 文档摘要（v1 暂不填） */
   docSummary?: string;
   /** 完整大纲 */
   outline: OutlineEntry[];
-  /** 文档总字符数（scope=document 时填充） */
+  /** 文档总字符数（scope=document 时填充）@deprecated 使用 stats.charCount */
   totalCharCount?: number;
-  /** 估算总 token 数（scope=document 时填充） */
+  /** 估算总 token 数（scope=document 时填充）@deprecated 使用 stats.tokenEstimate */
   approxTotalTokenCount?: number;
   /** 各章节预览（scope=document 时填充） */
   sectionsPreview?: SectionPreview[];
+  
+  // ========== structure-stats-sot v1.5 新增 ==========
+  
+  /**
+   * 文档结构真相
+   * 
+   * 这是所有"有几章/第几章"类问题的唯一数据来源。
+   * LLM 禁止自行推断结构。
+   */
+  structure?: DocStructure;
+  
+  /**
+   * 文档统计信息
+   * 
+   * 这是所有"有多少字/多少 token"类问题的唯一数据来源。
+   * LLM 禁止估算或猜测任何数字。
+   */
+  stats?: DocStats;
+  
+  /**
+   * 文档元信息
+   * 
+   * 包含文档标题等标识信息。
+   * 注意：meta.title 与章节标题是不同的概念！
+   */
+  docMeta?: DocMeta;
 }
 
 /**
@@ -153,6 +288,14 @@ export interface EnvelopeMeta {
  * 
  * 这是传递给 LLM 的统一上下文格式。
  * 包含三层信息：focus（焦点）/ neighborhood（邻域）/ global（全局）
+ * 
+ * v1.2 新增：
+ * - mode: 'full' | 'chunked' - Document scope 的工作模式
+ * - documentFullText: Full 模式下的完整文档文本
+ * - documentTokenEstimate: 文档 token 估算（用于调试和分流决策）
+ * 
+ * v1.3 新增：
+ * - skeleton: DocSkeleton - 始终附带的结构化骨架（LLM 友好）
  */
 export interface DocContextEnvelope {
   /** 文档 ID */
@@ -169,6 +312,48 @@ export interface DocContextEnvelope {
   budget: BudgetInfo;
   /** 元信息 */
   meta?: EnvelopeMeta;
+  
+  // ========== v1.2 新增：Full-Doc 模式支持 ==========
+  
+  /**
+   * Document scope 的工作模式
+   * 
+   * - 'full': 全文模式，documentFullText 包含完整文档内容
+   * - 'chunked': 分块模式，只提供结构预览和章节片段
+   * 
+   * 仅当 scope='document' 时有效，其他 scope 为 undefined
+   */
+  mode?: DocScopeMode;
+  
+  /**
+   * 完整文档文本
+   * 
+   * 仅当 scope='document' && mode='full' 时填充。
+   * 包含所有段落的文本，段落间用双换行分隔。
+   */
+  documentFullText?: string;
+  
+  /**
+   * 文档 token 估算
+   * 
+   * 用于调试、telemetry 和分流决策。
+   * 使用 estimateTokensForText() 计算。
+   */
+  documentTokenEstimate?: number;
+  
+  // ========== v1.3 新增：DocSkeleton 结构化骨架 ==========
+  
+  /**
+   * 文档结构骨架
+   * 
+   * 始终从 DocStructureEngine 生成，为 LLM 提供：
+   * - 统一的章节结构树
+   * - 语义化的章节角色（chapter/section/subsection）
+   * - 预计算的统计信息（chapterCount、hasIntro 等）
+   * 
+   * 这是 LLM 理解文档结构的权威来源。
+   */
+  skeleton?: import('../document/structure').DocSkeleton;
 }
 
 // ==========================================
